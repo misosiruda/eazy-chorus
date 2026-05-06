@@ -1,4 +1,13 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  AudioPlaybackEngine,
+  createMediaFilePathSet,
+  getEffectiveTrackGain,
+  getProjectDurationMs,
+  selectPartAudioVariant,
+  updateProjectWithDecodedDurations,
+  type TrackDecodeResult,
+} from '../features/audio-engine'
 import {
   createMediaTrack,
   createNewProject,
@@ -28,6 +37,8 @@ const MEDIA_VARIANT_OPTIONS: { value: MediaVariant; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ]
 
+const PLAYBACK_RATE_OPTIONS = [0.75, 0.9, 1, 1.1]
+
 export function HomePage() {
   const [project, setProject] = useState(() => createNewProject())
   const [mediaFiles, setMediaFiles] = useState<ProjectMediaFiles>({})
@@ -40,13 +51,22 @@ export function HomePage() {
     useState('새 프로젝트가 준비되었습니다.')
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [isExporting, setIsExporting] = useState(false)
+  const [audioPositionMs, setAudioPositionMs] = useState(0)
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false)
+  const [isAudioPreparing, setIsAudioPreparing] = useState(false)
+  const [audioError, setAudioError] = useState('')
+  const [playbackRate, setPlaybackRate] = useState(
+    () => project.settings.defaultPlaybackRate,
+  )
+  const audioEngineRef = useRef<AudioPlaybackEngine | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const mrInputRef = useRef<HTMLInputElement | null>(null)
   const partAudioInputRef = useRef<HTMLInputElement | null>(null)
 
   const validationIssues = useMemo(
     () =>
-      validateProjectPayload(project, new Set(Object.keys(mediaFiles))).issues,
+      validateProjectPayload(project, createMediaFilePathSet(mediaFiles))
+        .issues,
     [mediaFiles, project],
   )
   const validationErrors = validationIssues.filter(
@@ -56,15 +76,174 @@ export function HomePage() {
     (issue) => issue.severity === 'warning',
   )
   const mrTrack = project.media.find((track) => track.role === 'mr')
+  const audioDurationMs = getProjectDurationMs(project)
+  const activeTrackCount = project.media.filter((track) => track.enabled).length
+  const partVariantGroups = project.parts
+    .map((part) => ({
+      part,
+      tracks: project.media.filter(
+        (track) => track.role === 'part-audio' && track.partId === part.id,
+      ),
+    }))
+    .filter((group) => group.tracks.length > 0)
   const exportDisabled = isExporting || hasValidationErrors(validationIssues)
+
+  function applyDecodedDurations(decodedTracks: readonly TrackDecodeResult[]) {
+    setProject((currentProject) =>
+      updateProjectWithDecodedDurations(currentProject, decodedTracks),
+    )
+  }
+
+  useEffect(() => {
+    audioEngineRef.current?.releaseMissingTracks(
+      new Set(project.media.map((track) => track.id)),
+    )
+  }, [project.media])
+
+  useEffect(() => {
+    const audioEngine = audioEngineRef.current
+    if (!audioEngine) {
+      return
+    }
+
+    const syncAudioEngine = async () => {
+      try {
+        const decodedTracks = await audioEngine.sync({
+          tracks: project.media,
+          mediaFiles,
+          playbackRate,
+        })
+        applyDecodedDurations(decodedTracks)
+        setAudioError('')
+      } catch (error) {
+        setAudioError(getErrorMessage(error))
+        setIsAudioPlaying(false)
+      }
+    }
+
+    void syncAudioEngine()
+  }, [mediaFiles, playbackRate, project.media])
+
+  useEffect(() => {
+    if (!isAudioPlaying) {
+      return
+    }
+
+    const timerId = window.setInterval(() => {
+      const audioEngine = audioEngineRef.current
+      if (!audioEngine) {
+        return
+      }
+
+      const nextPositionMs = audioEngine.getPositionMs()
+      if (audioDurationMs > 0 && nextPositionMs >= audioDurationMs) {
+        audioEngine.pause()
+        setAudioPositionMs(audioDurationMs)
+        setIsAudioPlaying(false)
+        return
+      }
+
+      setAudioPositionMs(nextPositionMs)
+    }, 120)
+
+    return () => window.clearInterval(timerId)
+  }, [audioDurationMs, isAudioPlaying])
+
+  useEffect(() => {
+    return () => {
+      void audioEngineRef.current?.dispose()
+    }
+  }, [])
+
+  function getAudioEngine(): AudioPlaybackEngine {
+    if (!audioEngineRef.current) {
+      audioEngineRef.current = new AudioPlaybackEngine()
+    }
+
+    return audioEngineRef.current
+  }
+
+  async function playAudio(positionMs = audioPositionMs) {
+    if (project.media.length === 0 || validationErrors.length > 0) {
+      return
+    }
+
+    setIsAudioPreparing(true)
+    try {
+      const decodedTracks = await getAudioEngine().play({
+        tracks: project.media,
+        mediaFiles,
+        positionMs,
+        playbackRate,
+      })
+      applyDecodedDurations(decodedTracks)
+      setAudioPositionMs(positionMs)
+      setIsAudioPlaying(true)
+      setAudioError('')
+      setStatusMessage('오디오 재생을 시작했습니다.')
+    } catch (error) {
+      setAudioError(getErrorMessage(error))
+      setIsAudioPlaying(false)
+    } finally {
+      setIsAudioPreparing(false)
+    }
+  }
+
+  function pauseAudio() {
+    const nextPositionMs = audioEngineRef.current?.pause() ?? audioPositionMs
+    setAudioPositionMs(nextPositionMs)
+    setIsAudioPlaying(false)
+    setStatusMessage('오디오 재생을 일시정지했습니다.')
+  }
+
+  function stopAudio() {
+    audioEngineRef.current?.stop()
+    setAudioPositionMs(0)
+    setIsAudioPlaying(false)
+    setStatusMessage('오디오 재생을 정지했습니다.')
+  }
+
+  async function replayAudio() {
+    await playAudio(0)
+  }
+
+  async function seekAudio(positionMs: number) {
+    const nextPositionMs = clampPosition(positionMs, audioDurationMs)
+    setAudioPositionMs(nextPositionMs)
+
+    if (!audioEngineRef.current?.getState().isPlaying) {
+      return
+    }
+
+    setIsAudioPreparing(true)
+    try {
+      const decodedTracks = await audioEngineRef.current.seek(nextPositionMs, {
+        tracks: project.media,
+        mediaFiles,
+        playbackRate,
+      })
+      applyDecodedDurations(decodedTracks)
+      setAudioError('')
+    } catch (error) {
+      setAudioError(getErrorMessage(error))
+      setIsAudioPlaying(false)
+    } finally {
+      setIsAudioPreparing(false)
+    }
+  }
 
   function resetToNewProject() {
     const nextProject = createNewProject()
+    audioEngineRef.current?.stop()
     setProject(nextProject)
     setMediaFiles({})
     setSelectedPartId(nextProject.parts[0]?.id ?? '')
     setNewPartName('')
     setImportIssues([])
+    setAudioPositionMs(0)
+    setIsAudioPlaying(false)
+    setAudioError('')
+    setPlaybackRate(nextProject.settings.defaultPlaybackRate)
     setStatusMessage('새 프로젝트를 만들었습니다.')
   }
 
@@ -181,9 +360,16 @@ export function HomePage() {
     setProject((currentProject) =>
       touchProject({
         ...currentProject,
-        media: [...currentProject.media, track],
+        media: [
+          ...currentProject.media.map((item) =>
+            item.role === 'part-audio' && item.partId === selectedPartId
+              ? { ...item, enabled: false }
+              : item,
+          ),
+          track,
+        ],
         parts: currentProject.parts.map((part) =>
-          part.id === selectedPartId && !part.defaultTrackId
+          part.id === selectedPartId
             ? { ...part, defaultTrackId: track.id }
             : part,
         ),
@@ -197,6 +383,7 @@ export function HomePage() {
   }
 
   function removeMediaTrack(track: MediaTrack) {
+    const nextPositionMs = clampPosition(audioPositionMs, audioDurationMs)
     setProject((currentProject) =>
       touchProject({
         ...currentProject,
@@ -213,7 +400,28 @@ export function HomePage() {
       delete nextFiles[track.path]
       return nextFiles
     })
+    setAudioPositionMs(nextPositionMs)
     setStatusMessage(`${track.title} 음원을 제거했습니다.`)
+  }
+
+  function updateMediaTrackMix(
+    trackId: string,
+    patch: Partial<Pick<MediaTrack, 'volume' | 'muted' | 'solo' | 'enabled'>>,
+  ) {
+    setProject((currentProject) =>
+      touchProject({
+        ...currentProject,
+        media: currentProject.media.map((track) =>
+          track.id === trackId ? { ...track, ...patch } : track,
+        ),
+      }),
+    )
+  }
+
+  function updatePartAudioVariant(partId: string, trackId: string) {
+    setProject((currentProject) =>
+      touchProject(selectPartAudioVariant(currentProject, partId, trackId)),
+    )
   }
 
   async function handleImportFile(file: File | undefined) {
@@ -231,9 +439,14 @@ export function HomePage() {
       return
     }
 
+    audioEngineRef.current?.stop()
     setProject(result.package.project)
     setMediaFiles(result.package.mediaFiles)
     setSelectedPartId(result.package.project.parts[0]?.id ?? '')
+    setAudioPositionMs(0)
+    setIsAudioPlaying(false)
+    setAudioError('')
+    setPlaybackRate(result.package.project.settings.defaultPlaybackRate)
     setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
   }
 
@@ -460,6 +673,194 @@ export function HomePage() {
           </div>
         </section>
 
+        <section className="workspace-section" aria-labelledby="audio-title">
+          <div className="section-heading">
+            <h2 id="audio-title">Audio Engine</h2>
+            <span>
+              active {activeTrackCount}개 / decoded duration{' '}
+              {formatDuration(audioDurationMs)}
+            </span>
+          </div>
+
+          <div className="transport-panel">
+            <div className="transport-actions" aria-label="오디오 재생 컨트롤">
+              <button
+                type="button"
+                onClick={() =>
+                  isAudioPlaying ? pauseAudio() : void playAudio()
+                }
+                disabled={
+                  isAudioPreparing ||
+                  project.media.length === 0 ||
+                  validationErrors.length > 0
+                }
+              >
+                {isAudioPlaying ? '일시정지' : '재생'}
+              </button>
+              <button
+                type="button"
+                onClick={stopAudio}
+                disabled={isAudioPreparing || project.media.length === 0}
+              >
+                정지
+              </button>
+              <button
+                type="button"
+                onClick={() => void replayAudio()}
+                disabled={
+                  isAudioPreparing ||
+                  project.media.length === 0 ||
+                  validationErrors.length > 0
+                }
+              >
+                처음부터
+              </button>
+              <label>
+                속도
+                <select
+                  value={playbackRate}
+                  onChange={(event) =>
+                    setPlaybackRate(Number(event.target.value))
+                  }
+                >
+                  {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                    <option value={rate} key={rate}>
+                      {rate}x
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="seek-control">
+              Seek
+              <input
+                type="range"
+                min="0"
+                max={Math.max(audioDurationMs, 1)}
+                step="100"
+                value={clampPosition(audioPositionMs, audioDurationMs)}
+                disabled={audioDurationMs === 0}
+                onChange={(event) => void seekAudio(Number(event.target.value))}
+              />
+            </label>
+            <div className="transport-time">
+              <span>{formatDuration(audioPositionMs)}</span>
+              <span>{formatDuration(audioDurationMs)}</span>
+            </div>
+            {audioError ? (
+              <p className="audio-error" role="alert">
+                {audioError}
+              </p>
+            ) : null}
+          </div>
+
+          {partVariantGroups.length > 0 ? (
+            <div className="variant-switcher">
+              <h3>Part audio variant</h3>
+              {partVariantGroups.map(({ part, tracks }) => (
+                <label key={part.id}>
+                  {part.name}
+                  <select
+                    value={
+                      tracks.find((track) => track.enabled)?.id ??
+                      part.defaultTrackId ??
+                      ''
+                    }
+                    onChange={(event) =>
+                      updatePartAudioVariant(part.id, event.target.value)
+                    }
+                  >
+                    <option value="">사용 안 함</option>
+                    {tracks.map((track) => (
+                      <option value={track.id} key={track.id}>
+                        {track.title} / {track.variant ?? 'custom'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mixer-table" aria-label="오디오 믹서">
+            {project.media.map((track) => (
+              <div className="mixer-row" key={track.id}>
+                <div>
+                  <strong>{track.title}</strong>
+                  <span>
+                    {formatTrackRole(track, project.parts)} · gain{' '}
+                    {getEffectiveTrackGain(track, project.media).toFixed(2)}
+                  </span>
+                </div>
+                <label>
+                  Volume
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={track.volume}
+                    onChange={(event) =>
+                      updateMediaTrackMix(track.id, {
+                        volume: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={track.muted}
+                    onChange={(event) =>
+                      updateMediaTrackMix(track.id, {
+                        muted: event.target.checked,
+                      })
+                    }
+                  />
+                  Mute
+                </label>
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={track.solo}
+                    onChange={(event) =>
+                      updateMediaTrackMix(track.id, {
+                        solo: event.target.checked,
+                      })
+                    }
+                  />
+                  Solo
+                </label>
+                {track.role === 'mr' ? (
+                  <label className="inline-check">
+                    <input
+                      type="checkbox"
+                      checked={track.enabled}
+                      onChange={(event) =>
+                        updateMediaTrackMix(track.id, {
+                          enabled: event.target.checked,
+                        })
+                      }
+                    />
+                    Active
+                  </label>
+                ) : (
+                  <span className="variant-state">
+                    {track.enabled ? 'Active variant' : 'Inactive variant'}
+                  </span>
+                )}
+              </div>
+            ))}
+            {project.media.length === 0 ? (
+              <p className="empty-state">
+                음원을 추가하면 Web Audio 재생과 믹서 컨트롤을 사용할 수
+                있습니다.
+              </p>
+            ) : null}
+          </div>
+        </section>
+
         <section className="workspace-section" aria-labelledby="parts-title">
           <div className="section-heading">
             <h2 id="parts-title">Parts</h2>
@@ -589,6 +990,33 @@ function formatBytes(sizeBytes: number | undefined): string {
   }
 
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function formatDuration(durationMs: number): string {
+  const safeDurationMs = Math.max(0, Math.floor(durationMs))
+  const totalSeconds = Math.floor(safeDurationMs / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function clampPosition(positionMs: number, durationMs: number): number {
+  if (!Number.isFinite(positionMs)) {
+    return 0
+  }
+
+  if (durationMs <= 0) {
+    return Math.max(0, positionMs)
+  }
+
+  return Math.min(durationMs, Math.max(0, positionMs))
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : '오디오 재생 중 알 수 없는 오류가 발생했습니다.'
 }
 
 function downloadBlob(blob: Blob, fileName: string) {

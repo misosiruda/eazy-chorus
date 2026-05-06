@@ -17,6 +17,10 @@ describe('HomePage', () => {
     expect(
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
     ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Audio Engine' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '재생' })).toBeDisabled()
   })
 
   it('adds a part from the workspace form', async () => {
