@@ -1,0 +1,116 @@
+export const EAZY_CHORUS_APP_ID = 'eazy-chorus'
+export const PROJECT_SCHEMA_VERSION = 1
+
+export type ProjectSchemaVersion = typeof PROJECT_SCHEMA_VERSION
+
+export type MediaRole = 'mr' | 'part-audio'
+
+export type MediaVariant =
+  | 'fx'
+  | 'no-fx'
+  | 'pitch-corrected'
+  | 'guide'
+  | 'custom'
+
+export type GuidePosition = 'none' | 'above' | 'below'
+
+export type MarkStyle = 'line-above' | 'line-below' | 'highlight'
+
+export type LyricRole = 'main' | 'sub'
+
+export type ProjectMeta = {
+  id: string
+  title: string
+  artist?: string
+  key?: string
+  bpm?: number
+  memo?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type ProjectSettings = {
+  clickPreRollMs: number
+  defaultPlaybackRate: number
+  fileSizeWarningMb?: number
+  mobileFileSizeWarningMb?: number
+}
+
+export type MediaTrack = {
+  id: string
+  role: MediaRole
+  partId?: string
+  title: string
+  variant?: MediaVariant
+  path: string
+  mimeType?: string
+  durationMs?: number
+  sizeBytes?: number
+  volume: number
+  muted: boolean
+  solo: boolean
+  enabled: boolean
+  offsetMs?: number
+}
+
+export type Part = {
+  id: string
+  name: string
+  color: string
+  description?: string
+  defaultTrackId?: string
+  guidePosition: GuidePosition
+  defaultMarkStyle: MarkStyle
+}
+
+export type LyricLane = {
+  id: string
+  name: string
+  order: number
+  defaultRole: LyricRole
+}
+
+export type LyricSegment = {
+  id: string
+  role: LyricRole
+  text: string
+  partIds: string[]
+}
+
+export type LyricCue = {
+  id: string
+  laneId: string
+  startMs: number
+  endMs: number
+  segments: LyricSegment[]
+}
+
+export type PartMark = {
+  id: string
+  cueId: string
+  segmentId: string
+  partId: string
+  lineIndex?: number
+  startChar: number
+  endChar: number
+  style: MarkStyle
+}
+
+export type EazyChorusProject = {
+  schemaVersion: ProjectSchemaVersion
+  app: typeof EAZY_CHORUS_APP_ID
+  project: ProjectMeta
+  settings: ProjectSettings
+  media: MediaTrack[]
+  parts: Part[]
+  lyricLanes: LyricLane[]
+  cues: LyricCue[]
+  partMarks: PartMark[]
+}
+
+export type ProjectMediaFiles = Record<string, Blob>
+
+export type ProjectPackage = {
+  project: EazyChorusProject
+  mediaFiles: ProjectMediaFiles
+}
