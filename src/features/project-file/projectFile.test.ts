@@ -1,4 +1,6 @@
 import JSZip from 'jszip'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import {
   createMediaTrack,
   createNewProject,
@@ -76,6 +78,30 @@ describe('project-file feature', () => {
         }),
       ]),
     )
+  })
+
+  it('imports the published sample .eazychorus package', async () => {
+    const sampleBytes = await readFile(
+      resolve('public/samples/eazy-chorus-demo.eazychorus'),
+    )
+    const imported = await importProjectPackage(
+      new File([copyBytes(sampleBytes)], 'eazy-chorus-demo.eazychorus', {
+        type: 'application/zip',
+      }),
+    )
+
+    expect(
+      imported.issues.filter((issue) => issue.severity === 'error'),
+    ).toEqual([])
+    expect(imported.package?.project.project.title).toBe('Eazy Chorus Demo')
+    expect(imported.package?.project.cues).toHaveLength(4)
+    expect(imported.package?.project.partMarks).toHaveLength(3)
+    expect(Object.keys(imported.package?.mediaFiles ?? {}).sort()).toEqual([
+      'media/lower-harmony-guide.wav',
+      'media/main-vocal-guide.wav',
+      'media/sample-mr.wav',
+      'media/upper-harmony-guide.wav',
+    ])
   })
 })
 

@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "sample:project": "node scripts/create-sample-project.mjs",
     "test": "vitest run"
   },
   "dependencies": {
