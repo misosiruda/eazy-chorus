@@ -23,6 +23,9 @@ describe('HomePage', () => {
     expect(
       screen.getByRole('heading', { name: 'Lane & Tap Sync' }),
     ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Part Mark Editor' }),
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '재생' })).toBeDisabled()
   })
 
@@ -34,8 +37,8 @@ describe('HomePage', () => {
     await user.click(screen.getByRole('button', { name: 'Part 추가' }))
 
     expect(
-      screen.getByRole('option', { name: 'Upper Harmony' }),
-    ).toBeInTheDocument()
+      screen.getAllByRole('option', { name: 'Upper Harmony' }).length,
+    ).toBeGreaterThan(0)
     expect(screen.getByText(/part 2개/)).toBeInTheDocument()
   })
 
@@ -80,5 +83,29 @@ describe('HomePage', () => {
       screen.getAllByRole('button', { name: /키미노 나오 욘다/ }).length,
     ).toBeGreaterThan(0)
     expect(screen.getByText(/cue 1개/)).toBeInTheDocument()
+  })
+
+  it('edits a selected cue segment role from the part mark editor', async () => {
+    const user = userEvent.setup()
+    render(<HomePage />)
+
+    await user.type(
+      screen.getByLabelText('원본 가사 붙여넣기'),
+      '君の名を呼んだ\n키미노 나오 욘다\n너의 이름을 불렀어',
+    )
+    await user.click(screen.getByRole('button', { name: '가사 추출' }))
+    await user.click(screen.getByRole('button', { name: '추출 결과 확정' }))
+    await user.click(screen.getByRole('button', { name: /Lead에 배치/ }))
+    await user.selectOptions(
+      screen.getByLabelText('키미노 나오 욘다 segment role'),
+      'sub',
+    )
+
+    expect(screen.getByLabelText('키미노 나오 욘다 segment role')).toHaveValue(
+      'sub',
+    )
+    expect(
+      screen.getByText('sub segment role로 변경했습니다.'),
+    ).toBeInTheDocument()
   })
 })

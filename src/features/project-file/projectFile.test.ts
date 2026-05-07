@@ -37,6 +37,17 @@ describe('project-file feature', () => {
     expect(imported.package?.project.lyricDraft).toEqual([
       { id: 'lyric-draft-1', text: '키미노 나오 욘다' },
     ])
+    expect(imported.package?.project.partMarks).toEqual([
+      {
+        id: 'mark-1',
+        cueId: 'cue-001',
+        segmentId: 'seg-001',
+        partId: 'main-vocal',
+        startChar: 0,
+        endChar: 5,
+        style: 'highlight',
+      },
+    ])
     expect(imported.package?.project.media).toHaveLength(2)
     expect(Object.keys(imported.package?.mediaFiles ?? {}).sort()).toEqual([
       'media/mr.mp3',
@@ -109,6 +120,33 @@ function createProjectPackageFixture(): {
         : part,
     ),
     lyricDraft: [{ id: 'lyric-draft-1', text: '키미노 나오 욘다' }],
+    cues: [
+      {
+        id: 'cue-001',
+        laneId: 'lead',
+        startMs: 1000,
+        endMs: 3000,
+        segments: [
+          {
+            id: 'seg-001',
+            role: 'main',
+            text: '키미노 나오 욘다',
+            partIds: ['main-vocal'],
+          },
+        ],
+      },
+    ],
+    partMarks: [
+      {
+        id: 'mark-1',
+        cueId: 'cue-001',
+        segmentId: 'seg-001',
+        partId: 'main-vocal',
+        startChar: 0,
+        endChar: 5,
+        style: 'highlight',
+      },
+    ],
   }
 
   return {
