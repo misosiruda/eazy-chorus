@@ -121,6 +121,39 @@ textarea {
   line-height: 1.12;
 }
 
+.workspace-title-stack {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.workspace-mode-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(84px, auto));
+  gap: 4px;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #e2e8f0;
+}
+
+.workspace-mode-switch button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-color: transparent;
+  background: transparent;
+  color: #475569;
+}
+
+.workspace-mode-switch button[aria-pressed='true'] {
+  border-color: #94a3b8;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+}
+
 .workspace-actions {
   display: flex;
   flex-wrap: wrap;
@@ -160,6 +193,10 @@ textarea {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(440px, 1.4fr);
   gap: 16px;
+}
+
+.practice-grid {
+  grid-template-columns: 1fr;
 }
 
 .workspace-section {
