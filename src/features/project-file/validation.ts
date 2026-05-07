@@ -46,12 +46,18 @@ export function validateProjectPayload(
 
   const mediaItems = readArray(root.media, 'media', issues)
   const partItems = readArray(root.parts, 'parts', issues)
+  const lyricDraftItems = readOptionalArray(
+    root.lyricDraft,
+    'lyricDraft',
+    issues,
+  )
   const laneItems = readArray(root.lyricLanes, 'lyricLanes', issues)
   const cueItems = readArray(root.cues, 'cues', issues)
   const markItems = readArray(root.partMarks, 'partMarks', issues)
 
   const mediaIds = validateMedia(mediaItems, mediaPaths, issues)
   const partIds = validateParts(partItems, mediaIds, issues)
+  validateLyricDraft(lyricDraftItems, issues)
   const laneIds = validateLanes(laneItems, issues)
   const segmentTexts = validateCues(cueItems, laneIds, partIds, issues)
 
@@ -62,7 +68,7 @@ export function validateProjectPayload(
   return {
     project: hasValidationErrors(issues)
       ? null
-      : (payload as EazyChorusProject),
+      : normalizeProjectPayload(payload as EazyChorusProject, root),
     issues,
   }
 }
@@ -310,6 +316,39 @@ function validateLanes(
   return laneIds
 }
 
+function validateLyricDraft(
+  draftItems: readonly unknown[],
+  issues: ValidationIssue[],
+): void {
+  const draftIds = new Set<string>()
+
+  draftItems.forEach((item, index) => {
+    const pathPrefix = `lyricDraft[${index}]`
+    const draftLine = asRecord(item)
+    if (!draftLine) {
+      addError(issues, pathPrefix, 'lyric draft 항목은 객체여야 합니다.')
+      return
+    }
+
+    const id = requireString(draftLine.id, `${pathPrefix}.id`, issues)
+    if (id) {
+      if (draftIds.has(id)) {
+        addError(issues, `${pathPrefix}.id`, `중복 lyric draft id입니다: ${id}`)
+      }
+      draftIds.add(id)
+    }
+
+    const text = requireString(draftLine.text, `${pathPrefix}.text`, issues)
+    if (text !== undefined && text.trim() === '') {
+      addError(
+        issues,
+        `${pathPrefix}.text`,
+        'draft text는 비어 있을 수 없습니다.',
+      )
+    }
+  })
+}
+
 function validateCues(
   cueItems: readonly unknown[],
   laneIds: ReadonlySet<string>,
@@ -543,6 +582,18 @@ function readArray(
   return value
 }
 
+function readOptionalArray(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): unknown[] {
+  if (value === undefined) {
+    return []
+  }
+
+  return readArray(value, path, issues)
+}
+
 function requireString(
   value: unknown,
   path: string,
@@ -638,6 +689,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   }
 
   return value as Record<string, unknown>
+}
+
+function normalizeProjectPayload(
+  project: EazyChorusProject,
+  root: Record<string, unknown>,
+): EazyChorusProject {
+  return {
+    ...project,
+    lyricDraft: Array.isArray(root.lyricDraft) ? project.lyricDraft : [],
+  }
 }
 
 function createSegmentKey(cueId: string, segmentId: string): string {

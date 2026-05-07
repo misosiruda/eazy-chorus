@@ -35,4 +35,26 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/part 2개/)).toBeInTheDocument()
   })
+
+  it('extracts Japanese lyric blocks and confirms a lyric draft', async () => {
+    const user = userEvent.setup()
+    render(<HomePage />)
+
+    await user.type(
+      screen.getByLabelText('원본 가사 붙여넣기'),
+      '君の名を呼んだ\n키미노 나오 욘다\n너의 이름을 불렀어',
+    )
+    await user.click(screen.getByRole('button', { name: '가사 추출' }))
+
+    expect(screen.getByLabelText('추출 block 1')).toHaveValue(
+      '키미노 나오 욘다',
+    )
+
+    await user.click(screen.getByRole('button', { name: '추출 결과 확정' }))
+
+    expect(
+      screen.getByText('1줄 lyric draft를 저장했습니다.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/draft 1줄/)).toBeInTheDocument()
+  })
 })
