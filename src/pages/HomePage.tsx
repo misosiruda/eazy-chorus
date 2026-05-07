@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, MouseEvent } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent,
+} from 'react'
 import {
   AudioPlaybackEngine,
   createMediaFilePathSet,
@@ -60,6 +64,14 @@ import {
   validateProjectPayload,
   type ValidationIssue,
 } from '../features/project-file'
+import {
+  getCueClickTargetMs,
+  getFirstActiveTimelineCue,
+  getViewerLoopSeekTarget,
+  isAbLoopRangeReady,
+  type ViewerLoopMode,
+  type ViewerPanel,
+} from '../features/viewer-mode'
 
 type ProjectMetaTextField = 'title' | 'artist' | 'key' | 'memo'
 
@@ -131,12 +143,21 @@ export function HomePage() {
   const [playbackRate, setPlaybackRate] = useState(
     () => project.settings.defaultPlaybackRate,
   )
+  const [viewerPanel, setViewerPanel] = useState<ViewerPanel>('parts')
+  const [viewerLoopMode, setViewerLoopMode] = useState<ViewerLoopMode>('off')
+  const [abLoopStartMs, setAbLoopStartMs] = useState<number | null>(null)
+  const [abLoopEndMs, setAbLoopEndMs] = useState<number | null>(null)
+  const [viewerCueLoopId, setViewerCueLoopId] = useState<string | null>(null)
+  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false)
   const audioEngineRef = useRef<AudioPlaybackEngine | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const mrInputRef = useRef<HTMLInputElement | null>(null)
   const partAudioInputRef = useRef<HTMLInputElement | null>(null)
   const lyricSourcePreviewRef = useRef<HTMLDivElement | null>(null)
   const lyricExtractPreviewRef = useRef<HTMLDivElement | null>(null)
+  const viewerStageRef = useRef<HTMLDivElement | null>(null)
+  const viewerCueRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const viewerAutoScrollingRef = useRef(false)
   const syncingLyricScrollRef = useRef(false)
 
   const validationIssues = useMemo(
@@ -173,6 +194,20 @@ export function HomePage() {
     () => findActiveCueIds(project, audioPositionMs),
     [audioPositionMs, project],
   )
+  const activeTimelineCue = useMemo(
+    () => getFirstActiveTimelineCue(project, audioPositionMs),
+    [audioPositionMs, project],
+  )
+  const selectedTimelineCue =
+    timelineCues.find((cue) => cue.id === selectedCueId) ?? timelineCues[0]
+  const viewerLoopCue =
+    timelineCues.find((cue) => cue.id === viewerCueLoopId) ?? null
+  const abLoopReady = isAbLoopRangeReady({
+    startMs: abLoopStartMs,
+    endMs: abLoopEndMs,
+  })
+  const canPlayProjectAudio =
+    project.media.length > 0 && validationErrors.length === 0
   const extractedLineCount = countExportedLines(importBlocks)
   const partVariantGroups = project.parts
     .map((part) => ({
@@ -282,6 +317,30 @@ export function HomePage() {
       }
 
       const nextPositionMs = audioEngine.getPositionMs()
+      const loopTargetMs = getViewerLoopSeekTarget(project, nextPositionMs, {
+        mode: viewerLoopMode,
+        abLoop: {
+          startMs: abLoopStartMs,
+          endMs: abLoopEndMs,
+        },
+        cueId: viewerCueLoopId,
+      })
+      if (loopTargetMs !== null) {
+        setAudioPositionMs(loopTargetMs)
+        void audioEngine
+          .seek(loopTargetMs, {
+            tracks: project.media,
+            mediaFiles,
+            playbackRate,
+          })
+          .then(applyDecodedDurations)
+          .catch((error: unknown) => {
+            setAudioError(getErrorMessage(error))
+            setIsAudioPlaying(false)
+          })
+        return
+      }
+
       if (audioDurationMs > 0 && nextPositionMs >= audioDurationMs) {
         audioEngine.pause()
         setAudioPositionMs(audioDurationMs)
@@ -293,7 +352,37 @@ export function HomePage() {
     }, 120)
 
     return () => window.clearInterval(timerId)
-  }, [audioDurationMs, isAudioPlaying])
+  }, [
+    abLoopEndMs,
+    abLoopStartMs,
+    audioDurationMs,
+    isAudioPlaying,
+    mediaFiles,
+    playbackRate,
+    project,
+    viewerCueLoopId,
+    viewerLoopMode,
+  ])
+
+  useEffect(() => {
+    if (isAutoScrollPaused || !activeTimelineCue) {
+      return
+    }
+
+    const activeCueElement = viewerCueRefs.current[activeTimelineCue.id]
+    if (
+      !activeCueElement ||
+      typeof activeCueElement.scrollIntoView !== 'function'
+    ) {
+      return
+    }
+
+    viewerAutoScrollingRef.current = true
+    activeCueElement.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    window.setTimeout(() => {
+      viewerAutoScrollingRef.current = false
+    }, 0)
+  }, [activeTimelineCue, isAutoScrollPaused])
 
   useEffect(() => {
     return () => {
@@ -397,6 +486,12 @@ export function HomePage() {
     setIsAudioPlaying(false)
     setAudioError('')
     setPlaybackRate(nextProject.settings.defaultPlaybackRate)
+    setViewerPanel('parts')
+    setViewerLoopMode('off')
+    setAbLoopStartMs(null)
+    setAbLoopEndMs(null)
+    setViewerCueLoopId(null)
+    setIsAutoScrollPaused(false)
     setStatusMessage('새 프로젝트를 만들었습니다.')
   }
 
@@ -859,6 +954,182 @@ export function HomePage() {
     )
   }
 
+  async function playViewerCue(cue: LyricCue) {
+    const targetMs = getCueClickTargetMs(cue, project.settings.clickPreRollMs)
+    setSelectedLaneId(cue.laneId)
+    setSelectedCueId(cue.id)
+    setIsAutoScrollPaused(false)
+
+    if (canPlayProjectAudio) {
+      await playAudio(targetMs)
+      setStatusMessage(
+        `${formatDuration(targetMs)}부터 viewer cue를 재생합니다.`,
+      )
+      return
+    }
+
+    await seekAudio(targetMs)
+    setStatusMessage(
+      `${formatDuration(targetMs)}로 이동했습니다. 음원을 추가하면 바로 재생됩니다.`,
+    )
+  }
+
+  function markAbLoopBoundary(boundary: 'start' | 'end') {
+    const loopPositionMs = clampPosition(audioPositionMs, audioDurationMs)
+    const nextAbLoop = {
+      startMs: boundary === 'start' ? loopPositionMs : abLoopStartMs,
+      endMs: boundary === 'end' ? loopPositionMs : abLoopEndMs,
+    }
+
+    setAbLoopStartMs(nextAbLoop.startMs)
+    setAbLoopEndMs(nextAbLoop.endMs)
+
+    if (isAbLoopRangeReady(nextAbLoop)) {
+      setViewerLoopMode('ab')
+      setStatusMessage(
+        `A-B 반복 구간을 ${formatLoopRange(nextAbLoop.startMs, nextAbLoop.endMs)}로 설정했습니다.`,
+      )
+      return
+    }
+
+    setStatusMessage(
+      boundary === 'start'
+        ? `A 지점을 ${formatDuration(loopPositionMs)}로 설정했습니다.`
+        : `B 지점을 ${formatDuration(loopPositionMs)}로 설정했습니다.`,
+    )
+  }
+
+  function toggleAbLoop() {
+    if (viewerLoopMode === 'ab') {
+      setViewerLoopMode('off')
+      setStatusMessage('A-B 반복을 해제했습니다.')
+      return
+    }
+
+    const nextAbLoop = { startMs: abLoopStartMs, endMs: abLoopEndMs }
+    if (!isAbLoopRangeReady(nextAbLoop)) {
+      setStatusMessage('A-B 반복은 A보다 뒤에 있는 B 지점이 필요합니다.')
+      return
+    }
+
+    setViewerLoopMode('ab')
+    setStatusMessage(
+      `A-B 반복을 ${formatLoopRange(abLoopStartMs, abLoopEndMs)}로 켰습니다.`,
+    )
+  }
+
+  function toggleCueLoop() {
+    const loopTargetCue = activeTimelineCue ?? selectedTimelineCue
+    if (!loopTargetCue) {
+      setStatusMessage('반복할 cue가 없습니다.')
+      return
+    }
+
+    if (viewerLoopMode === 'cue' && viewerCueLoopId === loopTargetCue.id) {
+      setViewerLoopMode('off')
+      setStatusMessage('현재 cue 반복을 해제했습니다.')
+      return
+    }
+
+    setViewerCueLoopId(loopTargetCue.id)
+    setViewerLoopMode('cue')
+    setSelectedLaneId(loopTargetCue.laneId)
+    setSelectedCueId(loopTargetCue.id)
+    setStatusMessage(`${getCueText(loopTargetCue)} cue 반복을 켰습니다.`)
+  }
+
+  function handleViewerScroll() {
+    if (viewerAutoScrollingRef.current) {
+      return
+    }
+
+    setIsAutoScrollPaused(true)
+  }
+
+  function resumeViewerAutoScroll() {
+    setIsAutoScrollPaused(false)
+    setStatusMessage('Viewer auto-scroll을 현재 위치로 재개했습니다.')
+  }
+
+  function handleViewerKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) {
+      return
+    }
+
+    if (event.code === 'Space') {
+      event.preventDefault()
+      if (isAudioPlaying) {
+        pauseAudio()
+      } else {
+        void playAudio()
+      }
+      return
+    }
+
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      if (event.shiftKey) {
+        selectTimelineCue('previous')
+      } else {
+        void seekAudio(audioPositionMs - 2000)
+      }
+      return
+    }
+
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      if (event.shiftKey) {
+        selectTimelineCue('next')
+      } else {
+        void seekAudio(audioPositionMs + 2000)
+      }
+      return
+    }
+
+    if (event.key.toLowerCase() === 'l') {
+      event.preventDefault()
+      toggleAbLoop()
+      return
+    }
+
+    if (event.key.toLowerCase() === 'm') {
+      event.preventDefault()
+      setViewerPanel('mixer')
+      return
+    }
+
+    if (event.key.toLowerCase() === 'p') {
+      event.preventDefault()
+      setViewerPanel('parts')
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setViewerPanel('parts')
+    }
+  }
+
+  function selectTimelineCue(direction: 'previous' | 'next') {
+    if (!selectedTimelineCue) {
+      return
+    }
+
+    const currentIndex = timelineCues.findIndex(
+      (cue) => cue.id === selectedTimelineCue.id,
+    )
+    const nextIndex =
+      direction === 'previous' ? currentIndex - 1 : currentIndex + 1
+    const nextCue = timelineCues[nextIndex]
+    if (!nextCue) {
+      return
+    }
+
+    setSelectedLaneId(nextCue.laneId)
+    setSelectedCueId(nextCue.id)
+    setIsAutoScrollPaused(false)
+  }
+
   async function handleImportFile(file: File | undefined) {
     if (!file) {
       return
@@ -887,6 +1158,12 @@ export function HomePage() {
     setLyricsSource('')
     setImportBlocks([])
     setPlaybackRate(result.package.project.settings.defaultPlaybackRate)
+    setViewerPanel('parts')
+    setViewerLoopMode('off')
+    setAbLoopStartMs(null)
+    setAbLoopEndMs(null)
+    setViewerCueLoopId(null)
+    setIsAutoScrollPaused(false)
     setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
   }
 
@@ -1719,46 +1996,288 @@ export function HomePage() {
               <p className="empty-state">편집할 cue가 없습니다.</p>
             )}
           </div>
+        </section>
 
-          <div className="viewer-preview-panel">
-            <div className="panel-title-row">
-              <h3>Viewer preview</h3>
-              <span>{formatDuration(audioPositionMs)}</span>
-            </div>
-            <div
-              className="viewer-lyrics-stage"
-              aria-label="viewer cue preview"
-            >
-              {timelineCues.map((cue) => (
+        <section
+          className="workspace-section viewer-mode-section"
+          aria-labelledby="viewer-mode-title"
+          onKeyDown={handleViewerKeyDown}
+        >
+          <div className="section-heading">
+            <h2 id="viewer-mode-title">Viewer Mode</h2>
+            <span>
+              {timelineCues.length} cue / auto-scroll{' '}
+              {isAutoScrollPaused ? 'paused' : 'on'}
+            </span>
+          </div>
+
+          <div className="viewer-mode-layout">
+            <div className="viewer-main">
+              <div
+                ref={viewerStageRef}
+                className="viewer-lyrics-stage"
+                aria-label="viewer lyrics document"
+                tabIndex={0}
+                onScroll={handleViewerScroll}
+              >
+                {timelineCues.map((cue) => (
+                  <button
+                    ref={(element) => {
+                      viewerCueRefs.current[cue.id] = element
+                    }}
+                    className={
+                      activeCueIds.has(cue.id)
+                        ? 'viewer-cue viewer-cue-active'
+                        : 'viewer-cue'
+                    }
+                    type="button"
+                    key={cue.id}
+                    onClick={() => void playViewerCue(cue)}
+                  >
+                    <span className="viewer-cue-range">
+                      {formatCueRange(cue)}
+                    </span>
+                    <ViewerCueText
+                      cue={cue}
+                      parts={project.parts}
+                      partMarks={project.partMarks}
+                    />
+                  </button>
+                ))}
+                {timelineCues.length === 0 ? (
+                  <p className="empty-state">표시할 cue가 없습니다.</p>
+                ) : null}
+              </div>
+
+              {isAutoScrollPaused ? (
                 <button
-                  className={
-                    activeCueIds.has(cue.id)
-                      ? 'viewer-cue viewer-cue-active'
-                      : 'viewer-cue'
-                  }
+                  className="viewer-resume-scroll"
                   type="button"
-                  key={cue.id}
-                  onClick={() => {
-                    setSelectedLaneId(cue.laneId)
-                    setSelectedCueId(cue.id)
-                    void seekAudio(
-                      Math.max(
-                        0,
-                        cue.startMs - project.settings.clickPreRollMs,
-                      ),
-                    )
-                  }}
+                  onClick={resumeViewerAutoScroll}
                 >
-                  <ViewerCueText
-                    cue={cue}
-                    parts={project.parts}
-                    partMarks={project.partMarks}
-                  />
+                  현재 위치로
                 </button>
-              ))}
-              {timelineCues.length === 0 ? (
-                <p className="empty-state">표시할 cue가 없습니다.</p>
               ) : null}
+            </div>
+
+            <aside className="viewer-side-panel" aria-label="viewer side panel">
+              <div className="viewer-panel-tabs">
+                <button
+                  type="button"
+                  aria-pressed={viewerPanel === 'parts'}
+                  onClick={() => setViewerPanel('parts')}
+                >
+                  Parts
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={viewerPanel === 'mixer'}
+                  onClick={() => setViewerPanel('mixer')}
+                >
+                  Mixer
+                </button>
+              </div>
+
+              {viewerPanel === 'parts' ? (
+                <div className="viewer-parts-panel">
+                  {project.parts.map((part) => {
+                    const partTracks = project.media.filter(
+                      (track) =>
+                        track.role === 'part-audio' && track.partId === part.id,
+                    )
+
+                    return (
+                      <article className="viewer-part-item" key={part.id}>
+                        <div className="viewer-part-heading">
+                          <span
+                            className="viewer-part-color"
+                            style={{ backgroundColor: part.color }}
+                          />
+                          <strong>{part.name}</strong>
+                        </div>
+                        <p>{part.description || '파트 설명 없음'}</p>
+                        <dl>
+                          <div>
+                            <dt>Mark</dt>
+                            <dd>{part.defaultMarkStyle}</dd>
+                          </div>
+                          <div>
+                            <dt>Guide</dt>
+                            <dd>{part.guidePosition}</dd>
+                          </div>
+                          <div>
+                            <dt>Variant</dt>
+                            <dd>
+                              {partTracks.length > 0
+                                ? partTracks
+                                    .map((track) => track.variant ?? 'custom')
+                                    .join(', ')
+                                : '연결 없음'}
+                            </dd>
+                          </div>
+                        </dl>
+                      </article>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="viewer-mixer-panel">
+                  {partVariantGroups.length > 0 ? (
+                    <div className="viewer-variant-list">
+                      {partVariantGroups.map(({ part, tracks }) => (
+                        <label key={part.id}>
+                          {part.name}
+                          <select
+                            value={
+                              tracks.find((track) => track.enabled)?.id ??
+                              part.defaultTrackId ??
+                              ''
+                            }
+                            onChange={(event) =>
+                              updatePartAudioVariant(
+                                part.id,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="">사용 안 함</option>
+                            {tracks.map((track) => (
+                              <option value={track.id} key={track.id}>
+                                {track.title} / {track.variant ?? 'custom'}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="viewer-track-list">
+                    {project.media.map((track) => (
+                      <div className="viewer-track-row" key={track.id}>
+                        <div>
+                          <strong>{track.title}</strong>
+                          <span>{formatTrackRole(track, project.parts)}</span>
+                        </div>
+                        <label>
+                          Volume
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={track.volume}
+                            onChange={(event) =>
+                              updateMediaTrackMix(track.id, {
+                                volume: Number(event.target.value),
+                              })
+                            }
+                          />
+                        </label>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={track.muted}
+                            onChange={(event) =>
+                              updateMediaTrackMix(track.id, {
+                                muted: event.target.checked,
+                              })
+                            }
+                          />
+                          Mute
+                        </label>
+                        <label className="inline-check">
+                          <input
+                            type="checkbox"
+                            checked={track.solo}
+                            onChange={(event) =>
+                              updateMediaTrackMix(track.id, {
+                                solo: event.target.checked,
+                              })
+                            }
+                          />
+                          Solo
+                        </label>
+                      </div>
+                    ))}
+                    {project.media.length === 0 ? (
+                      <p className="empty-state">
+                        음원을 추가하면 Viewer Mixer를 사용할 수 있습니다.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </aside>
+          </div>
+
+          <div className="viewer-playbar" aria-label="viewer playbar">
+            <button
+              type="button"
+              onClick={() => (isAudioPlaying ? pauseAudio() : void playAudio())}
+              disabled={isAudioPreparing || !canPlayProjectAudio}
+            >
+              {isAudioPlaying ? 'Pause' : 'Play'}
+            </button>
+            <div className="viewer-time">
+              <span>{formatDuration(audioPositionMs)}</span>
+              <span>{formatDuration(audioDurationMs)}</span>
+            </div>
+            <label className="viewer-seek-control">
+              Seek
+              <input
+                type="range"
+                min="0"
+                max={Math.max(audioDurationMs, 1)}
+                step="100"
+                value={clampPosition(audioPositionMs, audioDurationMs)}
+                disabled={audioDurationMs === 0}
+                onChange={(event) => void seekAudio(Number(event.target.value))}
+              />
+            </label>
+            <button type="button" onClick={() => markAbLoopBoundary('start')}>
+              A {formatDuration(abLoopStartMs ?? 0)}
+            </button>
+            <button type="button" onClick={() => markAbLoopBoundary('end')}>
+              B {formatDuration(abLoopEndMs ?? 0)}
+            </button>
+            <button
+              type="button"
+              aria-pressed={viewerLoopMode === 'ab'}
+              disabled={!abLoopReady}
+              onClick={toggleAbLoop}
+            >
+              A-B Loop
+            </button>
+            <button
+              type="button"
+              aria-pressed={viewerLoopMode === 'cue'}
+              disabled={!selectedTimelineCue && !activeTimelineCue}
+              onClick={toggleCueLoop}
+            >
+              Cue Loop
+            </button>
+            <label>
+              Rate
+              <select
+                value={playbackRate}
+                onChange={(event) =>
+                  setPlaybackRate(Number(event.target.value))
+                }
+              >
+                {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                  <option value={rate} key={rate}>
+                    {rate}x
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="viewer-loop-state">
+              {viewerLoopMode === 'ab'
+                ? `A-B ${formatLoopRange(abLoopStartMs, abLoopEndMs)}`
+                : viewerLoopMode === 'cue' && viewerLoopCue
+                  ? `Cue ${getCueText(viewerLoopCue)}`
+                  : 'Loop off'}
             </div>
           </div>
         </section>
@@ -2134,6 +2653,10 @@ function formatDuration(durationMs: number): string {
   const seconds = totalSeconds % 60
 
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function formatLoopRange(startMs: number | null, endMs: number | null): string {
+  return `${formatDuration(startMs ?? 0)} - ${formatDuration(endMs ?? 0)}`
 }
 
 function formatCueRange(cue: LyricCue): string {

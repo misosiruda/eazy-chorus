@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomePage } from './HomePage'
 
@@ -25,6 +25,9 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: 'Part Mark Editor' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Viewer Mode' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '재생' })).toBeDisabled()
   })
@@ -106,6 +109,28 @@ describe('HomePage', () => {
     )
     expect(
       screen.getByText('sub segment role로 변경했습니다.'),
+    ).toBeInTheDocument()
+  })
+
+  it('opens a placed cue from Viewer Mode with the project pre-roll', async () => {
+    const user = userEvent.setup()
+    render(<HomePage />)
+
+    await user.type(
+      screen.getByLabelText('원본 가사 붙여넣기'),
+      '君の名を呼んだ\n키미노 나오 욘다\n너의 이름을 불렀어',
+    )
+    await user.click(screen.getByRole('button', { name: '가사 추출' }))
+    await user.click(screen.getByRole('button', { name: '추출 결과 확정' }))
+    await user.click(screen.getByRole('button', { name: /Lead에 배치/ }))
+
+    const viewerStage = screen.getByLabelText('viewer lyrics document')
+    await user.click(
+      within(viewerStage).getByRole('button', { name: /키미노 나오 욘다/ }),
+    )
+
+    expect(
+      screen.getByText('0:00로 이동했습니다. 음원을 추가하면 바로 재생됩니다.'),
     ).toBeInTheDocument()
   })
 })
