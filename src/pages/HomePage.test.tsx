@@ -7,8 +7,12 @@ describe('HomePage', () => {
     render(<HomePage />)
 
     expect(
-      screen.getByRole('heading', { name: 'Project File Workspace' }),
+      screen.getByRole('heading', { name: 'Editor Workspace' }),
     ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '편집자' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
     expect(screen.getByRole('button', { name: '새 프로젝트' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '파일 열기' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '샘플 열기' })).toBeEnabled()
@@ -31,6 +35,34 @@ describe('HomePage', () => {
       screen.getByRole('heading', { name: 'Viewer Mode' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '재생' })).toBeDisabled()
+  })
+
+  it('switches to a practice-focused viewer screen', async () => {
+    const user = userEvent.setup()
+    render(<HomePage />)
+
+    await user.click(screen.getByRole('button', { name: '연습자' }))
+
+    expect(
+      screen.getByRole('heading', { name: 'Practice Viewer' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '연습자' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.queryByRole('button', { name: '새 프로젝트' })).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: '.eazychorus 저장' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('heading', { name: 'Project Meta' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: 'Viewer Mode' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
+    ).toBeInTheDocument()
   })
 
   it('adds a part from the workspace form', async () => {
