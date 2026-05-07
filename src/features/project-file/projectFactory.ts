@@ -72,6 +72,7 @@ export function createNewProject(
         defaultMarkStyle: 'highlight',
       },
     ],
+    lyricDraft: [],
     lyricLanes: [
       {
         id: 'lead',

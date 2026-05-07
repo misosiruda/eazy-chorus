@@ -64,6 +64,7 @@ type EazyChorusProject = {
   settings: ProjectSettings
   media: MediaTrack[]
   parts: Part[]
+  lyricDraft: LyricDraftLine[]
   lyricLanes: LyricLane[]
   cues: LyricCue[]
   partMarks: PartMark[]
@@ -170,7 +171,24 @@ type Part = {
 }
 ```
 
-## 9. LyricLane
+## 9. LyricDraftLine
+
+LyricDraftLine은 import confirm 이후 아직 lane/cue 편집에 배치되지 않은 가사 초안이다.
+
+```ts
+type LyricDraftLine = {
+  id: string
+  text: string
+}
+```
+
+규칙:
+
+- 원본 import 전체를 저장하지 않고, 사용자가 confirm한 추출 결과만 저장한다.
+- 빈 줄은 저장하지 않는다.
+- Milestone 4 이후 lane/cue 편집기는 `lyricDraft`를 입력 자료로 사용한다.
+
+## 10. LyricLane
 
 Lane은 편집과 싱크를 위한 논리적 가사 흐름이다.
 
@@ -194,7 +212,7 @@ type LyricLane = {
 }
 ```
 
-## 10. LyricCue
+## 11. LyricCue
 
 Cue는 특정 시간 범위에 표시되는 가사 단위다.
 
@@ -208,7 +226,7 @@ type LyricCue = {
 }
 ```
 
-## 11. LyricSegment
+## 12. LyricSegment
 
 Segment는 cue 내부의 텍스트 조각이다. Main/Sub lyric role은 segment에 부여한다.
 
@@ -246,7 +264,7 @@ type LyricSegment = {
 }
 ```
 
-## 12. PartMark
+## 13. PartMark
 
 PartMark는 독립 가사 텍스트가 아니라, 기존 가사 구간에 붙는 시각 표시다.
 
@@ -270,7 +288,7 @@ type PartMark = {
 - 하나의 segment 전체를 표시하려면 `startChar: 0`, `endChar: text.length`를 사용한다.
 - 같은 범위를 다시 드래그하면 동일 PartMark를 제거한다.
 
-## 13. 예시 `project.json`
+## 14. 예시 `project.json`
 
 ```json
 {
@@ -352,6 +370,12 @@ type PartMark = {
       "defaultMarkStyle": "line-above"
     }
   ],
+  "lyricDraft": [
+    {
+      "id": "lyric-draft-1",
+      "text": "키미노 나오 욘다"
+    }
+  ],
   "lyricLanes": [
     {
       "id": "lead",
@@ -390,7 +414,7 @@ type PartMark = {
 }
 ```
 
-## 14. Validation 규칙
+## 15. Validation 규칙
 
 저장 전 다음을 검사한다.
 
@@ -399,6 +423,7 @@ type PartMark = {
 - 모든 `media.path`가 ZIP 내부에 실제 존재하는가.
 - `part.defaultTrackId`가 존재하는 media를 가리키는가.
 - `media.role === 'part-audio'`인 경우 `partId`가 실제 Part를 가리키는가.
+- 모든 `lyricDraft` 항목의 `id`, `text`가 비어 있지 않은가.
 - 모든 cue의 `startMs < endMs`인가.
 - 모든 cue의 `laneId`가 실제 lane을 가리키는가.
 - 모든 segment의 `text`가 비어 있지 않은가.
@@ -406,7 +431,7 @@ type PartMark = {
 - PartMark의 `startChar`, `endChar`가 segment text 범위 안에 있는가.
 - 음원 duration 차이가 큰 경우 경고한다.
 
-## 15. Migration 정책
+## 16. Migration 정책
 
 - 모든 프로젝트 파일은 `schemaVersion`을 가진다.
 - 앱은 현재 지원하는 schemaVersion보다 높은 파일을 열 때 경고해야 한다.

@@ -96,6 +96,11 @@ export type PartMark = {
   style: MarkStyle
 }
 
+export type LyricDraftLine = {
+  id: string
+  text: string
+}
+
 export type EazyChorusProject = {
   schemaVersion: ProjectSchemaVersion
   app: typeof EAZY_CHORUS_APP_ID
@@ -103,6 +108,7 @@ export type EazyChorusProject = {
   settings: ProjectSettings
   media: MediaTrack[]
   parts: Part[]
+  lyricDraft: LyricDraftLine[]
   lyricLanes: LyricLane[]
   cues: LyricCue[]
   partMarks: PartMark[]

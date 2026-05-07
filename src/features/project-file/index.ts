@@ -9,6 +9,7 @@ export {
 export type {
   EazyChorusProject,
   LyricCue,
+  LyricDraftLine,
   LyricLane,
   LyricRole,
   LyricSegment,
