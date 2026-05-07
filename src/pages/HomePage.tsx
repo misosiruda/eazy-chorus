@@ -9,6 +9,13 @@ import {
   type TrackDecodeResult,
 } from '../features/audio-engine'
 import {
+  countExportedLines,
+  createLyricDraftLines,
+  extractLyricImportBlocks,
+  splitEditedLyricLines,
+  type ImportBlock,
+} from '../features/lyrics-import'
+import {
   createMediaTrack,
   createNewProject,
   createPart,
@@ -50,6 +57,8 @@ export function HomePage() {
   const [statusMessage, setStatusMessage] =
     useState('새 프로젝트가 준비되었습니다.')
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
+  const [lyricsSource, setLyricsSource] = useState('')
+  const [importBlocks, setImportBlocks] = useState<ImportBlock[]>([])
   const [isExporting, setIsExporting] = useState(false)
   const [audioPositionMs, setAudioPositionMs] = useState(0)
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
@@ -62,6 +71,9 @@ export function HomePage() {
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const mrInputRef = useRef<HTMLInputElement | null>(null)
   const partAudioInputRef = useRef<HTMLInputElement | null>(null)
+  const lyricSourcePreviewRef = useRef<HTMLDivElement | null>(null)
+  const lyricExtractPreviewRef = useRef<HTMLDivElement | null>(null)
+  const syncingLyricScrollRef = useRef(false)
 
   const validationIssues = useMemo(
     () =>
@@ -78,6 +90,8 @@ export function HomePage() {
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const audioDurationMs = getProjectDurationMs(project)
   const activeTrackCount = project.media.filter((track) => track.enabled).length
+  const lyricDraft = project.lyricDraft ?? []
+  const extractedLineCount = countExportedLines(importBlocks)
   const partVariantGroups = project.parts
     .map((part) => ({
       part,
@@ -240,6 +254,8 @@ export function HomePage() {
     setSelectedPartId(nextProject.parts[0]?.id ?? '')
     setNewPartName('')
     setImportIssues([])
+    setLyricsSource('')
+    setImportBlocks([])
     setAudioPositionMs(0)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -300,6 +316,67 @@ export function HomePage() {
         ),
       }),
     )
+  }
+
+  function extractLyricsSource() {
+    const nextBlocks = extractLyricImportBlocks(lyricsSource)
+    setImportBlocks(nextBlocks)
+    setStatusMessage(
+      nextBlocks.length > 0
+        ? `${nextBlocks.length}개 lyric import block을 추출했습니다.`
+        : '붙여넣은 가사가 없어 추출할 수 없습니다.',
+    )
+  }
+
+  function updateImportBlockExport(blockId: string, value: string) {
+    setImportBlocks((currentBlocks) =>
+      currentBlocks.map((block) =>
+        block.id === blockId
+          ? { ...block, exportedLines: splitEditedLyricLines(value) }
+          : block,
+      ),
+    )
+  }
+
+  function confirmLyricsImport() {
+    const nextDraft = createLyricDraftLines(importBlocks)
+    if (nextDraft.length === 0) {
+      setStatusMessage('확정할 lyric draft가 없습니다.')
+      return
+    }
+
+    setProject((currentProject) =>
+      touchProject({
+        ...currentProject,
+        lyricDraft: nextDraft,
+      }),
+    )
+    setStatusMessage(`${nextDraft.length}줄 lyric draft를 저장했습니다.`)
+  }
+
+  function syncLyricPreviewScroll(source: 'source' | 'extract') {
+    if (syncingLyricScrollRef.current) {
+      return
+    }
+
+    const fromElement =
+      source === 'source'
+        ? lyricSourcePreviewRef.current
+        : lyricExtractPreviewRef.current
+    const toElement =
+      source === 'source'
+        ? lyricExtractPreviewRef.current
+        : lyricSourcePreviewRef.current
+    if (!fromElement || !toElement) {
+      return
+    }
+
+    syncingLyricScrollRef.current = true
+    toElement.scrollTop = fromElement.scrollTop
+    toElement.scrollLeft = fromElement.scrollLeft
+    window.requestAnimationFrame(() => {
+      syncingLyricScrollRef.current = false
+    })
   }
 
   async function addMrFile(file: File | undefined) {
@@ -446,6 +523,8 @@ export function HomePage() {
     setAudioPositionMs(0)
     setIsAudioPlaying(false)
     setAudioError('')
+    setLyricsSource('')
+    setImportBlocks([])
     setPlaybackRate(result.package.project.settings.defaultPlaybackRate)
     setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
   }
@@ -859,6 +938,123 @@ export function HomePage() {
               </p>
             ) : null}
           </div>
+        </section>
+
+        <section
+          className="workspace-section lyric-import-section"
+          aria-labelledby="lyrics-import-title"
+        >
+          <div className="section-heading">
+            <h2 id="lyrics-import-title">Lyric Import</h2>
+            <span>
+              draft {lyricDraft.length}줄 / block {importBlocks.length}개
+            </span>
+          </div>
+
+          <label className="wide-field">
+            원본 가사 붙여넣기
+            <textarea
+              value={lyricsSource}
+              rows={8}
+              placeholder="일본어 가사&#10;한글 차음&#10;한국어 해석"
+              onChange={(event) => setLyricsSource(event.target.value)}
+            />
+          </label>
+
+          <div className="lyric-import-actions">
+            <button type="button" onClick={extractLyricsSource}>
+              가사 추출
+            </button>
+            <button
+              type="button"
+              onClick={confirmLyricsImport}
+              disabled={extractedLineCount === 0}
+            >
+              추출 결과 확정
+            </button>
+            <span>{extractedLineCount}줄 추출됨</span>
+          </div>
+
+          {importBlocks.length > 0 ? (
+            <div className="lyric-confirm-grid">
+              <div>
+                <h3>원본 가사</h3>
+                <div
+                  ref={lyricSourcePreviewRef}
+                  className="lyric-scroll-column"
+                  role="region"
+                  aria-label="원본 가사 비교"
+                  onScroll={() => syncLyricPreviewScroll('source')}
+                >
+                  {importBlocks.map((block, index) => (
+                    <div
+                      className={`lyric-import-block lyric-import-block-${block.confidence}`}
+                      key={block.id}
+                    >
+                      <div className="lyric-block-meta">
+                        #{index + 1} {block.pattern} / {block.confidence}
+                      </div>
+                      {block.sourceLines.map((line, lineIndex) => (
+                        <p key={`${block.id}-source-${lineIndex}`}>{line}</p>
+                      ))}
+                      {block.warnings.length > 0 ? (
+                        <ul>
+                          {block.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3>추출된 가사</h3>
+                <div
+                  ref={lyricExtractPreviewRef}
+                  className="lyric-scroll-column"
+                  role="region"
+                  aria-label="추출된 가사 편집"
+                  onScroll={() => syncLyricPreviewScroll('extract')}
+                >
+                  {importBlocks.map((block, index) => (
+                    <label
+                      className={`lyric-import-block lyric-import-block-${block.confidence}`}
+                      key={block.id}
+                    >
+                      추출 block {index + 1}
+                      <textarea
+                        rows={Math.max(2, block.exportedLines.length)}
+                        value={block.exportedLines.join('\n')}
+                        onChange={(event) =>
+                          updateImportBlockExport(block.id, event.target.value)
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {lyricDraft.length > 0 ? (
+            <div className="lyric-draft-preview">
+              <h3>Lyric draft</h3>
+              <ol>
+                {lyricDraft.slice(0, 8).map((line) => (
+                  <li key={line.id}>{line.text}</li>
+                ))}
+              </ol>
+              {lyricDraft.length > 8 ? (
+                <p>외 {lyricDraft.length - 8}줄</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="empty-state">
+              확정된 lyric draft가 없습니다. 추출 결과를 확인한 뒤 저장하세요.
+            </p>
+          )}
         </section>
 
         <section className="workspace-section" aria-labelledby="parts-title">
