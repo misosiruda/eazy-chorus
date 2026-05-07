@@ -11,6 +11,7 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '새 프로젝트' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '파일 열기' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '샘플 열기' })).toBeEnabled()
     expect(
       screen.getByRole('button', { name: '.eazychorus 저장' }),
     ).toBeEnabled()

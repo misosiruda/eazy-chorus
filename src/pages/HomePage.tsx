@@ -104,6 +104,8 @@ const GUIDE_POSITION_OPTIONS: {
   { value: 'above', label: 'Above' },
   { value: 'below', label: 'Below' },
 ]
+const SAMPLE_PROJECT_FILE_NAME = 'eazy-chorus-demo.eazychorus'
+const SAMPLE_PROJECT_URL = `${import.meta.env.BASE_URL}samples/${SAMPLE_PROJECT_FILE_NAME}`
 
 type LaneEditorHistory = {
   past: LaneEditorSnapshot[]
@@ -1167,6 +1169,27 @@ export function HomePage() {
     setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
   }
 
+  async function openSampleProject() {
+    setStatusMessage('샘플 프로젝트를 불러오는 중입니다.')
+
+    try {
+      const response = await fetch(SAMPLE_PROJECT_URL)
+      if (!response.ok) {
+        throw new Error(`Sample request failed: ${response.status}`)
+      }
+
+      await handleImportFile(
+        new File([await response.blob()], SAMPLE_PROJECT_FILE_NAME, {
+          type: 'application/zip',
+        }),
+      )
+    } catch {
+      setStatusMessage(
+        '샘플 프로젝트를 불러올 수 없습니다. 배포 파일 또는 네트워크 상태를 확인하세요.',
+      )
+    }
+  }
+
   async function exportCurrentProject() {
     const projectToExport = touchProject(project)
     setIsExporting(true)
@@ -1204,6 +1227,9 @@ export function HomePage() {
           </button>
           <button type="button" onClick={() => importInputRef.current?.click()}>
             파일 열기
+          </button>
+          <button type="button" onClick={() => void openSampleProject()}>
+            샘플 열기
           </button>
           <button
             type="button"
