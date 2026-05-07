@@ -269,16 +269,30 @@ label {
 
 .part-item {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(120px, 0.8fr);
-  gap: 10px;
-  align-items: center;
+  gap: 12px;
   padding: 10px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
 }
 
-.part-item span {
+.part-summary-row,
+.part-config-row {
+  display: grid;
+  gap: 10px;
+  align-items: end;
+}
+
+.part-summary-row {
+  grid-template-columns: 44px minmax(0, 1fr) minmax(180px, 1fr);
+}
+
+.part-config-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(130px, auto);
+}
+
+.part-config-row span {
+  align-self: center;
   color: #64748b;
   font-size: 0.84rem;
   overflow-wrap: anywhere;
@@ -527,6 +541,7 @@ label {
 .lane-control-panel,
 .draft-queue-panel,
 .tap-sync-panel,
+.part-mark-editor-panel,
 .viewer-preview-panel {
   display: grid;
   gap: 12px;
@@ -535,6 +550,7 @@ label {
 .lane-control-panel h3,
 .draft-queue-panel h3,
 .tap-sync-panel h3,
+.part-mark-editor-panel h3,
 .viewer-preview-panel h3 {
   margin: 0;
   color: #334155;
@@ -650,6 +666,78 @@ label {
   font-weight: 800;
 }
 
+.part-mark-control-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.segment-editor-list {
+  display: grid;
+  gap: 8px;
+}
+
+.segment-editor-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.28fr) minmax(0, 1.1fr) minmax(
+      160px,
+      0.6fr
+    );
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.segment-select-text {
+  min-height: 42px;
+  padding: 10px 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  cursor: text;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.segment-select-text-main {
+  font-weight: 800;
+}
+
+.segment-select-text-sub {
+  color: #475569;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.part-mark-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.part-mark-chip,
+.part-mark-chip-empty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.part-mark-chip-empty {
+  background: #ffffff;
+  color: #64748b;
+}
+
 .viewer-lyrics-stage {
   display: grid;
   gap: 4px;
@@ -681,6 +769,44 @@ label {
 .viewer-cue-active {
   background: #f8fafc;
   color: #0f172a;
+}
+
+.viewer-cue-text {
+  display: block;
+}
+
+.viewer-segment {
+  line-height: 1.7;
+}
+
+.viewer-segment-main {
+  font-weight: 800;
+}
+
+.viewer-segment-sub {
+  color: #94a3b8;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.viewer-cue-active .viewer-segment-sub {
+  color: #475569;
+}
+
+.viewer-segment-gap {
+  white-space: pre;
+}
+
+.part-mark-fragment {
+  padding: 2px 1px;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.part-mark-fragment-marked {
+  border-radius: 3px;
 }
 
 .validation-list + .validation-list {
@@ -751,12 +877,16 @@ label {
   .media-import-row,
   .part-add-row,
   .part-item,
+  .part-summary-row,
+  .part-config-row,
   .transport-actions,
   .mixer-row,
   .lyric-confirm-grid,
   .lane-editor-layout,
   .lane-add-row,
   .tap-sync-actions,
+  .part-mark-control-row,
+  .segment-editor-row,
   .cue-select-button {
     grid-template-columns: 1fr;
   }

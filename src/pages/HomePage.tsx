@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, MouseEvent } from 'react'
 import {
   AudioPlaybackEngine,
   createMediaFilePathSet,
@@ -33,6 +34,12 @@ import {
   type LaneEditorSnapshot,
 } from '../features/lane-editor'
 import {
+  getPartMarksForSegment,
+  splitSegmentTextByPartMarks,
+  togglePartMark,
+  updateCueSegmentRole,
+} from '../features/part-editor'
+import {
   createMediaTrack,
   createNewProject,
   createPart,
@@ -46,6 +53,7 @@ import {
   type MediaTrack,
   type MediaVariant,
   type Part,
+  type PartMark,
   type ProjectMediaFiles,
   sanitizeFileName,
   touchProject,
@@ -67,6 +75,22 @@ const PLAYBACK_RATE_OPTIONS = [0.75, 0.9, 1, 1.1]
 const LANE_ROLE_OPTIONS: { value: LyricRole; label: string }[] = [
   { value: 'main', label: 'Main' },
   { value: 'sub', label: 'Sub' },
+]
+const PART_MARK_STYLE_OPTIONS: {
+  value: Part['defaultMarkStyle']
+  label: string
+}[] = [
+  { value: 'highlight', label: 'Highlight' },
+  { value: 'line-above', label: 'Line above' },
+  { value: 'line-below', label: 'Line below' },
+]
+const GUIDE_POSITION_OPTIONS: {
+  value: Part['guidePosition']
+  label: string
+}[] = [
+  { value: 'none', label: 'None' },
+  { value: 'above', label: 'Above' },
+  { value: 'below', label: 'Below' },
 ]
 
 type LaneEditorHistory = {
@@ -128,6 +152,8 @@ export function HomePage() {
     (issue) => issue.severity === 'warning',
   )
   const mrTrack = project.media.find((track) => track.role === 'mr')
+  const selectedPart =
+    project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
   const audioDurationMs = getProjectDurationMs(project)
   const activeTrackCount = project.media.filter((track) => track.enabled).length
   const lyricDraft = project.lyricDraft ?? []
@@ -141,6 +167,7 @@ export function HomePage() {
   const selectedCue =
     selectedLaneCues.find((cue) => cue.id === selectedCueId) ??
     selectedLaneCues[0]
+  const selectedCueSegmentCount = selectedCue?.segments.length ?? 0
   const timelineCues = useMemo(() => getTimelineCues(project), [project])
   const activeCueIds = useMemo(
     () => findActiveCueIds(project, audioPositionMs),
@@ -416,7 +443,12 @@ export function HomePage() {
 
   function updatePart(
     partId: string,
-    patch: Partial<Pick<Part, 'name' | 'color'>>,
+    patch: Partial<
+      Pick<
+        Part,
+        'name' | 'color' | 'description' | 'guidePosition' | 'defaultMarkStyle'
+      >
+    >,
   ) {
     setProject((currentProject) =>
       touchProject({
@@ -425,6 +457,64 @@ export function HomePage() {
           part.id === partId ? { ...part, ...patch } : part,
         ),
       }),
+    )
+  }
+
+  function updateSelectedCueSegmentRole(segmentId: string, role: LyricRole) {
+    if (!selectedCue) {
+      setStatusMessage('role을 편집할 cue가 없습니다.')
+      return
+    }
+
+    const nextProject = updateCueSegmentRole(project, {
+      cueId: selectedCue.id,
+      segmentId,
+      role,
+    })
+    if (nextProject === project) {
+      return
+    }
+
+    commitLaneEditorProject(nextProject, `${role} segment role로 변경했습니다.`)
+  }
+
+  function toggleSelectedPartMark(
+    event: MouseEvent<HTMLSpanElement>,
+    cueId: string,
+    segmentId: string,
+  ) {
+    if (!selectedPart) {
+      setStatusMessage('Part Mark를 추가할 part가 없습니다.')
+      return
+    }
+
+    const textRange = getTextSelectionRange(event.currentTarget)
+    if (!textRange) {
+      return
+    }
+
+    const isRemoving = project.partMarks.some(
+      (mark) =>
+        mark.cueId === cueId &&
+        mark.segmentId === segmentId &&
+        mark.partId === selectedPart.id &&
+        mark.startChar === textRange.startChar &&
+        mark.endChar === textRange.endChar,
+    )
+    const nextProject = togglePartMark(project, {
+      cueId,
+      segmentId,
+      partId: selectedPart.id,
+      startChar: textRange.startChar,
+      endChar: textRange.endChar,
+    })
+    if (nextProject === project) {
+      return
+    }
+
+    commitLaneEditorProject(
+      nextProject,
+      `${selectedPart.name} Part Mark를 ${isRemoving ? '제거' : '추가'}했습니다.`,
     )
   }
 
@@ -763,7 +853,7 @@ export function HomePage() {
     )
   }
 
-  function updatePartAudioVariant(partId: string, trackId: string) {
+  function updatePartAudioVariant(partId: string, trackId: string | null) {
     setProject((currentProject) =>
       touchProject(selectPartAudioVariant(currentProject, partId, trackId)),
     )
@@ -1517,6 +1607,119 @@ export function HomePage() {
             ) : null}
           </div>
 
+          <div className="part-mark-editor-panel">
+            <div className="panel-title-row">
+              <h3>Part Mark Editor</h3>
+              <span>
+                segment {selectedCueSegmentCount}개 / mark{' '}
+                {project.partMarks.length}개
+              </span>
+            </div>
+
+            <div className="part-mark-control-row">
+              <label>
+                Mark 대상 Part
+                <select
+                  value={selectedPart?.id ?? ''}
+                  onChange={(event) => setSelectedPartId(event.target.value)}
+                >
+                  {project.parts.map((part) => (
+                    <option value={part.id} key={part.id}>
+                      {part.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                기본 mark
+                <select
+                  value={selectedPart?.defaultMarkStyle ?? 'highlight'}
+                  disabled={!selectedPart}
+                  onChange={(event) =>
+                    selectedPart
+                      ? updatePart(selectedPart.id, {
+                          defaultMarkStyle: event.target
+                            .value as Part['defaultMarkStyle'],
+                        })
+                      : undefined
+                  }
+                >
+                  {PART_MARK_STYLE_OPTIONS.map((option) => (
+                    <option value={option.value} key={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {selectedCue ? (
+              <div className="segment-editor-list">
+                {selectedCue.segments.map((segment) => {
+                  const segmentMarks = getPartMarksForSegment(
+                    project.partMarks,
+                    selectedCue.id,
+                    segment.id,
+                  )
+
+                  return (
+                    <div className="segment-editor-row" key={segment.id}>
+                      <label>
+                        Role
+                        <select
+                          aria-label={`${segment.text} segment role`}
+                          value={segment.role}
+                          onChange={(event) =>
+                            updateSelectedCueSegmentRole(
+                              segment.id,
+                              event.target.value as LyricRole,
+                            )
+                          }
+                        >
+                          {LANE_ROLE_OPTIONS.map((option) => (
+                            <option value={option.value} key={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <span
+                        className={`segment-select-text segment-select-text-${segment.role}`}
+                        onMouseUp={(event) =>
+                          toggleSelectedPartMark(
+                            event,
+                            selectedCue.id,
+                            segment.id,
+                          )
+                        }
+                      >
+                        {segment.text}
+                      </span>
+                      <div className="part-mark-chip-list">
+                        {segmentMarks.map((mark) => (
+                          <span
+                            className="part-mark-chip"
+                            key={mark.id}
+                            style={createPartSwatchStyle(mark, project.parts)}
+                          >
+                            {formatPartMarkLabel(mark, project.parts)}
+                          </span>
+                        ))}
+                        {segmentMarks.length === 0 ? (
+                          <span className="part-mark-chip-empty">
+                            Part Mark 없음
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="empty-state">편집할 cue가 없습니다.</p>
+            )}
+          </div>
+
           <div className="viewer-preview-panel">
             <div className="panel-title-row">
               <h3>Viewer preview</h3>
@@ -1546,7 +1749,11 @@ export function HomePage() {
                     )
                   }}
                 >
-                  {getCueText(cue)}
+                  <ViewerCueText
+                    cue={cue}
+                    parts={project.parts}
+                    partMarks={project.partMarks}
+                  />
                 </button>
               ))}
               {timelineCues.length === 0 ? (
@@ -1575,29 +1782,113 @@ export function HomePage() {
           </div>
 
           <div className="part-list">
-            {project.parts.map((part) => (
-              <div className="part-item" key={part.id}>
-                <input
-                  aria-label={`${part.name} 색상`}
-                  className="part-color"
-                  type="color"
-                  value={part.color}
-                  onChange={(event) =>
-                    updatePart(part.id, { color: event.target.value })
-                  }
-                />
-                <label>
-                  Part 이름
-                  <input
-                    value={part.name}
-                    onChange={(event) =>
-                      updatePart(part.id, { name: event.target.value })
-                    }
-                  />
-                </label>
-                <span>{part.defaultTrackId ?? 'defaultTrackId 없음'}</span>
-              </div>
-            ))}
+            {project.parts.map((part) => {
+              const partTracks = project.media.filter(
+                (track) =>
+                  track.role === 'part-audio' && track.partId === part.id,
+              )
+
+              return (
+                <div className="part-item" key={part.id}>
+                  <div className="part-summary-row">
+                    <input
+                      aria-label={`${part.name} 색상`}
+                      className="part-color"
+                      type="color"
+                      value={part.color}
+                      onChange={(event) =>
+                        updatePart(part.id, { color: event.target.value })
+                      }
+                    />
+                    <label>
+                      Part 이름
+                      <input
+                        value={part.name}
+                        onChange={(event) =>
+                          updatePart(part.id, { name: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Audio variant 연결
+                      <select
+                        value={part.defaultTrackId ?? ''}
+                        onChange={(event) =>
+                          updatePartAudioVariant(
+                            part.id,
+                            event.target.value || null,
+                          )
+                        }
+                      >
+                        <option value="">연결 없음</option>
+                        {partTracks.map((track) => (
+                          <option value={track.id} key={track.id}>
+                            {track.title} / {track.variant ?? 'custom'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <label>
+                    설명
+                    <textarea
+                      rows={2}
+                      value={part.description ?? ''}
+                      onChange={(event) =>
+                        updatePart(part.id, {
+                          description: event.target.value.trim() || undefined,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <div className="part-config-row">
+                    <label>
+                      Guide 위치
+                      <select
+                        value={part.guidePosition}
+                        onChange={(event) =>
+                          updatePart(part.id, {
+                            guidePosition: event.target
+                              .value as Part['guidePosition'],
+                          })
+                        }
+                      >
+                        {GUIDE_POSITION_OPTIONS.map((option) => (
+                          <option value={option.value} key={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Mark style
+                      <select
+                        value={part.defaultMarkStyle}
+                        onChange={(event) =>
+                          updatePart(part.id, {
+                            defaultMarkStyle: event.target
+                              .value as Part['defaultMarkStyle'],
+                          })
+                        }
+                      >
+                        {PART_MARK_STYLE_OPTIONS.map((option) => (
+                          <option value={option.value} key={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <span>
+                      {partTracks.length > 0
+                        ? `${partTracks.length}개 variant`
+                        : '연결된 variant 없음'}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </section>
 
@@ -1632,6 +1923,54 @@ export function HomePage() {
   )
 }
 
+function ViewerCueText({
+  cue,
+  parts,
+  partMarks,
+}: {
+  cue: LyricCue
+  parts: readonly Part[]
+  partMarks: readonly PartMark[]
+}) {
+  return (
+    <span className="viewer-cue-text">
+      {cue.segments.map((segment, segmentIndex) => {
+        const segmentMarks = getPartMarksForSegment(
+          partMarks,
+          cue.id,
+          segment.id,
+        )
+        const fragments = splitSegmentTextByPartMarks(segment, segmentMarks)
+
+        return (
+          <span
+            className={`viewer-segment viewer-segment-${segment.role}`}
+            key={segment.id}
+          >
+            {segmentIndex > 0 ? (
+              <span className="viewer-segment-gap"> </span>
+            ) : null}
+            {fragments.map((fragment) => (
+              <span
+                className={
+                  fragment.marks.length > 0
+                    ? 'part-mark-fragment part-mark-fragment-marked'
+                    : 'part-mark-fragment'
+                }
+                key={`${segment.id}-${fragment.startChar}-${fragment.endChar}`}
+                style={createPartMarkFragmentStyle(fragment.marks, parts)}
+                title={formatPartMarkTitle(fragment.marks, parts)}
+              >
+                {fragment.text}
+              </span>
+            ))}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 function ValidationList({
   title,
   issues,
@@ -1662,8 +2001,109 @@ function ValidationList({
   )
 }
 
+type TextSelectionRange = {
+  startChar: number
+  endChar: number
+}
+
+function getTextSelectionRange(
+  element: HTMLElement,
+): TextSelectionRange | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return null
+  }
+
+  const selectionRange = selection.getRangeAt(0)
+  if (
+    !element.contains(selectionRange.startContainer) ||
+    !element.contains(selectionRange.endContainer)
+  ) {
+    return null
+  }
+
+  const startChar = getSelectionTextLengthBefore(element, {
+    node: selectionRange.startContainer,
+    offset: selectionRange.startOffset,
+  })
+  const endChar = getSelectionTextLengthBefore(element, {
+    node: selectionRange.endContainer,
+    offset: selectionRange.endOffset,
+  })
+  selection.removeAllRanges()
+
+  return {
+    startChar: Math.min(startChar, endChar),
+    endChar: Math.max(startChar, endChar),
+  }
+}
+
+function getSelectionTextLengthBefore(
+  element: HTMLElement,
+  boundary: { node: Node; offset: number },
+): number {
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.setEnd(boundary.node, boundary.offset)
+  return range.toString().length
+}
+
 function createExistingMediaPathSet(project: EazyChorusProject): Set<string> {
   return new Set(project.media.map((track) => track.path))
+}
+
+function createPartMarkFragmentStyle(
+  marks: readonly PartMark[],
+  parts: readonly Part[],
+): CSSProperties {
+  const highlightMark = marks.find((mark) => mark.style === 'highlight')
+  const lineAboveMark = marks.find((mark) => mark.style === 'line-above')
+  const lineBelowMark = marks.find((mark) => mark.style === 'line-below')
+  const style: CSSProperties = {}
+
+  if (highlightMark) {
+    style.backgroundColor = `${getPartColor(highlightMark.partId, parts)}33`
+  }
+  if (lineAboveMark) {
+    style.borderTop = `3px solid ${getPartColor(lineAboveMark.partId, parts)}`
+  }
+  if (lineBelowMark) {
+    style.borderBottom = `3px solid ${getPartColor(lineBelowMark.partId, parts)}`
+  }
+
+  return style
+}
+
+function createPartSwatchStyle(
+  mark: PartMark,
+  parts: readonly Part[],
+): CSSProperties {
+  const color = getPartColor(mark.partId, parts)
+
+  return {
+    borderColor: color,
+    backgroundColor: `${color}20`,
+  }
+}
+
+function formatPartMarkLabel(mark: PartMark, parts: readonly Part[]): string {
+  const partName =
+    parts.find((part) => part.id === mark.partId)?.name ?? mark.partId
+
+  return `${partName} ${mark.startChar}-${mark.endChar}`
+}
+
+function formatPartMarkTitle(
+  marks: readonly PartMark[],
+  parts: readonly Part[],
+): string | undefined {
+  return marks.length > 0
+    ? marks.map((mark) => formatPartMarkLabel(mark, parts)).join(', ')
+    : undefined
+}
+
+function getPartColor(partId: string, parts: readonly Part[]): string {
+  return parts.find((part) => part.id === partId)?.color ?? '#64748b'
 }
 
 function formatTrackRole(track: MediaTrack, parts: readonly Part[]): string {
