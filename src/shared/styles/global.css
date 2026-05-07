@@ -513,6 +513,176 @@ label {
   font-size: 0.88rem;
 }
 
+.lane-editor-section {
+  display: grid;
+  gap: 16px;
+}
+
+.lane-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(260px, 1fr);
+  gap: 14px;
+}
+
+.lane-control-panel,
+.draft-queue-panel,
+.tap-sync-panel,
+.viewer-preview-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.lane-control-panel h3,
+.draft-queue-panel h3,
+.tap-sync-panel h3,
+.viewer-preview-panel h3 {
+  margin: 0;
+  color: #334155;
+  font-size: 0.92rem;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.panel-title-row span {
+  color: #64748b;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lane-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 0.4fr) auto;
+  gap: 8px;
+}
+
+.lane-pill-list,
+.draft-line-list,
+.cue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lane-pill {
+  display: grid;
+  justify-items: start;
+  min-height: 52px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.lane-pill-active {
+  border-color: #0f766e;
+  background: #ecfdf5;
+  color: #0f513d;
+}
+
+.lane-pill span,
+.cue-select-button strong {
+  overflow-wrap: anywhere;
+}
+
+.lane-pill small,
+.cue-select-button small {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.draft-line-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.draft-line-item p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.tap-sync-actions {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cue-list {
+  max-height: 330px;
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.cue-list-item {
+  margin: 0;
+}
+
+.cue-select-button {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(86px, auto) 72px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 54px;
+  text-align: left;
+}
+
+.cue-list-item-active .cue-select-button {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.cue-select-button span {
+  color: #2563eb;
+  font-weight: 800;
+}
+
+.viewer-lyrics-stage {
+  display: grid;
+  gap: 4px;
+  max-height: 360px;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #0f172a;
+}
+
+.viewer-cue {
+  justify-content: start;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: #cbd5e1;
+  text-align: left;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.viewer-cue:hover:not(:disabled) {
+  border-color: #334155;
+  color: #ffffff;
+}
+
+.viewer-cue-active {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
 .validation-list + .validation-list {
   margin-top: 18px;
 }
@@ -583,7 +753,11 @@ label {
   .part-item,
   .transport-actions,
   .mixer-row,
-  .lyric-confirm-grid {
+  .lyric-confirm-grid,
+  .lane-editor-layout,
+  .lane-add-row,
+  .tap-sync-actions,
+  .cue-select-button {
     grid-template-columns: 1fr;
   }
 
