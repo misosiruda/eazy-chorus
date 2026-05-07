@@ -16,6 +16,23 @@ import {
   type ImportBlock,
 } from '../features/lyrics-import'
 import {
+  createLaneEditorSnapshot,
+  createLyricLane,
+  findActiveCueIds,
+  getCueText,
+  getLaneCueSequence,
+  getNextCueId,
+  getPreviousCueId,
+  getSortedLanes,
+  getTimelineCues,
+  placeAllDraftLinesOnLane,
+  placeDraftLineOnLane,
+  restoreLaneEditorSnapshot,
+  syncCueEnd,
+  syncCueStart,
+  type LaneEditorSnapshot,
+} from '../features/lane-editor'
+import {
   createMediaTrack,
   createNewProject,
   createPart,
@@ -24,6 +41,8 @@ import {
   hasValidationErrors,
   importProjectPackage,
   type EazyChorusProject,
+  type LyricCue,
+  type LyricRole,
   type MediaTrack,
   type MediaVariant,
   type Part,
@@ -45,6 +64,15 @@ const MEDIA_VARIANT_OPTIONS: { value: MediaVariant; label: string }[] = [
 ]
 
 const PLAYBACK_RATE_OPTIONS = [0.75, 0.9, 1, 1.1]
+const LANE_ROLE_OPTIONS: { value: LyricRole; label: string }[] = [
+  { value: 'main', label: 'Main' },
+  { value: 'sub', label: 'Sub' },
+]
+
+type LaneEditorHistory = {
+  past: LaneEditorSnapshot[]
+  future: LaneEditorSnapshot[]
+}
 
 export function HomePage() {
   const [project, setProject] = useState(() => createNewProject())
@@ -59,6 +87,18 @@ export function HomePage() {
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
   const [importBlocks, setImportBlocks] = useState<ImportBlock[]>([])
+  const [newLaneName, setNewLaneName] = useState('')
+  const [newLaneRole, setNewLaneRole] = useState<LyricRole>('main')
+  const [selectedLaneId, setSelectedLaneId] = useState(
+    () => project.lyricLanes[0]?.id ?? '',
+  )
+  const [selectedCueId, setSelectedCueId] = useState('')
+  const [laneEditorHistory, setLaneEditorHistory] = useState<LaneEditorHistory>(
+    {
+      past: [],
+      future: [],
+    },
+  )
   const [isExporting, setIsExporting] = useState(false)
   const [audioPositionMs, setAudioPositionMs] = useState(0)
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
@@ -91,6 +131,21 @@ export function HomePage() {
   const audioDurationMs = getProjectDurationMs(project)
   const activeTrackCount = project.media.filter((track) => track.enabled).length
   const lyricDraft = project.lyricDraft ?? []
+  const sortedLanes = useMemo(() => getSortedLanes(project), [project])
+  const selectedLane =
+    sortedLanes.find((lane) => lane.id === selectedLaneId) ?? sortedLanes[0]
+  const selectedLaneCues = useMemo(
+    () => (selectedLane ? getLaneCueSequence(project, selectedLane.id) : []),
+    [project, selectedLane],
+  )
+  const selectedCue =
+    selectedLaneCues.find((cue) => cue.id === selectedCueId) ??
+    selectedLaneCues[0]
+  const timelineCues = useMemo(() => getTimelineCues(project), [project])
+  const activeCueIds = useMemo(
+    () => findActiveCueIds(project, audioPositionMs),
+    [audioPositionMs, project],
+  )
   const extractedLineCount = countExportedLines(importBlocks)
   const partVariantGroups = project.parts
     .map((part) => ({
@@ -107,6 +162,56 @@ export function HomePage() {
       updateProjectWithDecodedDurations(currentProject, decodedTracks),
     )
   }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) {
+        return
+      }
+
+      if (event.code === 'Space') {
+        event.preventDefault()
+        tapSelectedCueStart()
+        return
+      }
+
+      if (event.key.toLowerCase() === 'g') {
+        event.preventDefault()
+        tapSelectedCueEnd()
+        return
+      }
+
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        undoLaneEditorChange()
+        return
+      }
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        void seekAudio(audioPositionMs - 2000)
+        return
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        void seekAudio(audioPositionMs + 2000)
+        return
+      }
+
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        if (isAudioPlaying) {
+          pauseAudio()
+        } else {
+          void playAudio()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  })
 
   useEffect(() => {
     audioEngineRef.current?.releaseMissingTracks(
@@ -256,6 +361,11 @@ export function HomePage() {
     setImportIssues([])
     setLyricsSource('')
     setImportBlocks([])
+    setNewLaneName('')
+    setNewLaneRole('main')
+    setSelectedLaneId(nextProject.lyricLanes[0]?.id ?? '')
+    setSelectedCueId('')
+    setLaneEditorHistory({ past: [], future: [] })
     setAudioPositionMs(0)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -345,13 +455,13 @@ export function HomePage() {
       return
     }
 
-    setProject((currentProject) =>
-      touchProject({
-        ...currentProject,
+    commitLaneEditorProject(
+      {
+        ...project,
         lyricDraft: nextDraft,
-      }),
+      },
+      `${nextDraft.length}줄 lyric draft를 저장했습니다.`,
     )
-    setStatusMessage(`${nextDraft.length}줄 lyric draft를 저장했습니다.`)
   }
 
   function syncLyricPreviewScroll(source: 'source' | 'extract') {
@@ -377,6 +487,164 @@ export function HomePage() {
     window.requestAnimationFrame(() => {
       syncingLyricScrollRef.current = false
     })
+  }
+
+  function commitLaneEditorProject(
+    nextProject: EazyChorusProject,
+    nextStatusMessage: string,
+  ) {
+    setLaneEditorHistory((currentHistory) => ({
+      past: [...currentHistory.past, createLaneEditorSnapshot(project)].slice(
+        -50,
+      ),
+      future: [],
+    }))
+    setProject(touchProject(nextProject))
+    setStatusMessage(nextStatusMessage)
+  }
+
+  function addLyricLane() {
+    const nextLane = createLyricLane({
+      name: newLaneName,
+      defaultRole: newLaneRole,
+      existingLanes: project.lyricLanes,
+    })
+
+    commitLaneEditorProject(
+      {
+        ...project,
+        lyricLanes: [...project.lyricLanes, nextLane],
+      },
+      `${nextLane.name} lane을 추가했습니다.`,
+    )
+    setSelectedLaneId(nextLane.id)
+    setNewLaneName('')
+  }
+
+  function placeDraftLine(draftLineId: string) {
+    if (!selectedLane) {
+      setStatusMessage('가사를 배치할 lane이 없습니다.')
+      return
+    }
+
+    const nextProject = placeDraftLineOnLane(
+      project,
+      draftLineId,
+      selectedLane.id,
+    )
+    if (nextProject === project) {
+      setStatusMessage('선택한 lyric draft를 배치할 수 없습니다.')
+      return
+    }
+
+    const nextCue = nextProject.cues[nextProject.cues.length - 1]
+    commitLaneEditorProject(
+      nextProject,
+      `${selectedLane.name} lane에 cue를 추가했습니다.`,
+    )
+    setSelectedCueId(nextCue?.id ?? '')
+  }
+
+  function placeAllDraftLines() {
+    if (!selectedLane) {
+      setStatusMessage('가사를 배치할 lane이 없습니다.')
+      return
+    }
+
+    const draftCount = project.lyricDraft.length
+    const nextProject = placeAllDraftLinesOnLane(project, selectedLane.id)
+    if (nextProject === project) {
+      setStatusMessage('배치할 lyric draft가 없습니다.')
+      return
+    }
+
+    const firstAddedCue = nextProject.cues[project.cues.length]
+    commitLaneEditorProject(
+      nextProject,
+      `${selectedLane.name} lane에 ${draftCount}개 cue를 배치했습니다.`,
+    )
+    setSelectedCueId(firstAddedCue?.id ?? '')
+  }
+
+  function tapSelectedCueStart() {
+    if (!selectedCue) {
+      setStatusMessage('tap-sync할 cue가 없습니다.')
+      return
+    }
+
+    const nextProject = syncCueStart(project, selectedCue.id, audioPositionMs)
+    const nextCueId = getNextCueId(nextProject, selectedCue.id)
+    commitLaneEditorProject(
+      nextProject,
+      `${formatDuration(audioPositionMs)}에 cue 시작을 입력했습니다.`,
+    )
+    setSelectedCueId(nextCueId ?? selectedCue.id)
+  }
+
+  function tapSelectedCueEnd() {
+    if (!selectedCue) {
+      setStatusMessage('종료 시간을 입력할 cue가 없습니다.')
+      return
+    }
+
+    const nextProject = syncCueEnd(project, selectedCue.id, audioPositionMs)
+    commitLaneEditorProject(
+      nextProject,
+      `${formatDuration(audioPositionMs)}에 cue 종료를 입력했습니다.`,
+    )
+  }
+
+  function selectAdjacentCue(direction: 'previous' | 'next') {
+    if (!selectedCue) {
+      return
+    }
+
+    const adjacentCueId =
+      direction === 'previous'
+        ? getPreviousCueId(project, selectedCue.id)
+        : getNextCueId(project, selectedCue.id)
+    if (adjacentCueId) {
+      setSelectedCueId(adjacentCueId)
+    }
+  }
+
+  function undoLaneEditorChange() {
+    const previousSnapshot = laneEditorHistory.past.at(-1)
+    if (!previousSnapshot) {
+      setStatusMessage('되돌릴 lane 편집 이력이 없습니다.')
+      return
+    }
+
+    const nextPast = laneEditorHistory.past.slice(0, -1)
+    setLaneEditorHistory({
+      past: nextPast,
+      future: [
+        createLaneEditorSnapshot(project),
+        ...laneEditorHistory.future,
+      ].slice(0, 50),
+    })
+    setProject(
+      touchProject(restoreLaneEditorSnapshot(project, previousSnapshot)),
+    )
+    setStatusMessage('lane 편집을 한 단계 되돌렸습니다.')
+  }
+
+  function redoLaneEditorChange() {
+    const nextSnapshot = laneEditorHistory.future[0]
+    if (!nextSnapshot) {
+      setStatusMessage('다시 적용할 lane 편집 이력이 없습니다.')
+      return
+    }
+
+    setLaneEditorHistory({
+      past: [
+        ...laneEditorHistory.past,
+        createLaneEditorSnapshot(project),
+      ].slice(-50),
+      future: laneEditorHistory.future.slice(1),
+    })
+    setProject(touchProject(restoreLaneEditorSnapshot(project, nextSnapshot)))
+    setStatusMessage('lane 편집을 다시 적용했습니다.')
   }
 
   async function addMrFile(file: File | undefined) {
@@ -520,6 +788,9 @@ export function HomePage() {
     setProject(result.package.project)
     setMediaFiles(result.package.mediaFiles)
     setSelectedPartId(result.package.project.parts[0]?.id ?? '')
+    setSelectedLaneId(result.package.project.lyricLanes[0]?.id ?? '')
+    setSelectedCueId(result.package.project.cues[0]?.id ?? '')
+    setLaneEditorHistory({ past: [], future: [] })
     setAudioPositionMs(0)
     setIsAudioPlaying(false)
     setAudioError('')
@@ -1057,6 +1328,234 @@ export function HomePage() {
           )}
         </section>
 
+        <section
+          className="workspace-section lane-editor-section"
+          aria-labelledby="lane-editor-title"
+        >
+          <div className="section-heading">
+            <h2 id="lane-editor-title">Lane & Tap Sync</h2>
+            <span>
+              lane {project.lyricLanes.length}개 / cue {project.cues.length}개
+            </span>
+          </div>
+
+          <div className="lane-editor-layout">
+            <div className="lane-control-panel">
+              <h3>Lane</h3>
+              <div className="lane-add-row">
+                <input
+                  aria-label="새 lane 이름"
+                  placeholder="새 lane 이름"
+                  value={newLaneName}
+                  onChange={(event) => setNewLaneName(event.target.value)}
+                />
+                <select
+                  aria-label="새 lane 기본 role"
+                  value={newLaneRole}
+                  onChange={(event) =>
+                    setNewLaneRole(event.target.value as LyricRole)
+                  }
+                >
+                  {LANE_ROLE_OPTIONS.map((option) => (
+                    <option value={option.value} key={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={addLyricLane}>
+                  Lane 추가
+                </button>
+              </div>
+
+              <div className="lane-pill-list" aria-label="lyric lane 목록">
+                {sortedLanes.map((lane) => (
+                  <button
+                    className={
+                      lane.id === selectedLane?.id
+                        ? 'lane-pill lane-pill-active'
+                        : 'lane-pill'
+                    }
+                    type="button"
+                    aria-pressed={lane.id === selectedLane?.id}
+                    key={lane.id}
+                    onClick={() => setSelectedLaneId(lane.id)}
+                  >
+                    <span>{lane.name}</span>
+                    <small>
+                      {lane.defaultRole} ·{' '}
+                      {getLaneCueSequence(project, lane.id).length} cue
+                    </small>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="draft-queue-panel">
+              <div className="panel-title-row">
+                <h3>Lyric draft queue</h3>
+                <button
+                  type="button"
+                  onClick={placeAllDraftLines}
+                  disabled={!selectedLane || lyricDraft.length === 0}
+                >
+                  전체 배치
+                </button>
+              </div>
+              <div className="draft-line-list">
+                {lyricDraft.map((line) => (
+                  <div className="draft-line-item" key={line.id}>
+                    <p>{line.text}</p>
+                    <button
+                      type="button"
+                      aria-label={`${selectedLane?.name ?? '선택 lane'}에 배치: ${
+                        line.text
+                      }`}
+                      onClick={() => placeDraftLine(line.id)}
+                      disabled={!selectedLane}
+                    >
+                      배치
+                    </button>
+                  </div>
+                ))}
+                {lyricDraft.length === 0 ? (
+                  <p className="empty-state">
+                    대기 중인 lyric draft가 없습니다.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="tap-sync-panel">
+            <div className="panel-title-row">
+              <h3>{selectedLane?.name ?? 'Lane'} cues</h3>
+              <span>{selectedCue ? formatCueRange(selectedCue) : '-'}</span>
+            </div>
+
+            <div className="tap-sync-actions" aria-label="tap sync actions">
+              <button
+                type="button"
+                onClick={() => selectAdjacentCue('previous')}
+                disabled={
+                  !selectedCue || !getPreviousCueId(project, selectedCue.id)
+                }
+              >
+                이전 cue
+              </button>
+              <button
+                type="button"
+                onClick={tapSelectedCueStart}
+                disabled={!selectedCue}
+                aria-keyshortcuts="Space"
+                title="Space"
+              >
+                현재 시간 시작
+              </button>
+              <button
+                type="button"
+                onClick={tapSelectedCueEnd}
+                disabled={!selectedCue}
+                aria-keyshortcuts="G"
+                title="G"
+              >
+                현재 cue 종료
+              </button>
+              <button
+                type="button"
+                onClick={() => selectAdjacentCue('next')}
+                disabled={
+                  !selectedCue || !getNextCueId(project, selectedCue.id)
+                }
+              >
+                다음 cue
+              </button>
+              <button
+                type="button"
+                onClick={undoLaneEditorChange}
+                disabled={laneEditorHistory.past.length === 0}
+                aria-keyshortcuts="Backspace"
+                title="Backspace"
+              >
+                실행 취소
+              </button>
+              <button
+                type="button"
+                onClick={redoLaneEditorChange}
+                disabled={laneEditorHistory.future.length === 0}
+              >
+                다시 실행
+              </button>
+            </div>
+
+            <ol className="cue-list">
+              {selectedLaneCues.map((cue, index) => (
+                <li
+                  className={
+                    cue.id === selectedCue?.id
+                      ? 'cue-list-item cue-list-item-active'
+                      : 'cue-list-item'
+                  }
+                  key={cue.id}
+                >
+                  <button
+                    className="cue-select-button"
+                    type="button"
+                    onClick={() => setSelectedCueId(cue.id)}
+                  >
+                    <span>#{index + 1}</span>
+                    <strong>{getCueText(cue)}</strong>
+                    <small>{formatCueRange(cue)}</small>
+                    <small>{formatCueState(cue)}</small>
+                  </button>
+                </li>
+              ))}
+            </ol>
+            {selectedLaneCues.length === 0 ? (
+              <p className="empty-state">
+                선택한 lane에 배치된 cue가 없습니다.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="viewer-preview-panel">
+            <div className="panel-title-row">
+              <h3>Viewer preview</h3>
+              <span>{formatDuration(audioPositionMs)}</span>
+            </div>
+            <div
+              className="viewer-lyrics-stage"
+              aria-label="viewer cue preview"
+            >
+              {timelineCues.map((cue) => (
+                <button
+                  className={
+                    activeCueIds.has(cue.id)
+                      ? 'viewer-cue viewer-cue-active'
+                      : 'viewer-cue'
+                  }
+                  type="button"
+                  key={cue.id}
+                  onClick={() => {
+                    setSelectedLaneId(cue.laneId)
+                    setSelectedCueId(cue.id)
+                    void seekAudio(
+                      Math.max(
+                        0,
+                        cue.startMs - project.settings.clickPreRollMs,
+                      ),
+                    )
+                  }}
+                >
+                  {getCueText(cue)}
+                </button>
+              ))}
+              {timelineCues.length === 0 ? (
+                <p className="empty-state">표시할 cue가 없습니다.</p>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
         <section className="workspace-section" aria-labelledby="parts-title">
           <div className="section-heading">
             <h2 id="parts-title">Parts</h2>
@@ -1197,6 +1696,16 @@ function formatDuration(durationMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
 
+function formatCueRange(cue: LyricCue): string {
+  return `${formatDuration(cue.startMs)} - ${formatDuration(cue.endMs)}`
+}
+
+function formatCueState(cue: LyricCue): string {
+  return cue.startMs === 0 && cue.endMs - cue.startMs <= 1
+    ? 'unsynced'
+    : 'synced'
+}
+
 function clampPosition(positionMs: number, durationMs: number): number {
   if (!Number.isFinite(positionMs)) {
     return 0
@@ -1213,6 +1722,20 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : '오디오 재생 중 알 수 없는 오류가 발생했습니다.'
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target instanceof HTMLButtonElement
+  )
 }
 
 function downloadBlob(blob: Blob, fileName: string) {

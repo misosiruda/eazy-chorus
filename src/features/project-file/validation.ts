@@ -27,6 +27,7 @@ const GUIDE_POSITIONS = ['none', 'above', 'below'] as const
 const MARK_STYLES = ['line-above', 'line-below', 'highlight'] as const
 const LYRIC_ROLES = ['main', 'sub'] as const
 const DURATION_WARNING_THRESHOLD_MS = 3000
+const UNSYNCED_CUE_DURATION_MS = 1
 
 export function validateProjectPayload(
   payload: unknown,
@@ -387,6 +388,14 @@ function validateCues(
     const endMs = requireNumber(cue.endMs, `${cuePath}.endMs`, issues)
     if (startMs !== undefined && endMs !== undefined && startMs >= endMs) {
       addError(issues, cuePath, 'cue startMs는 endMs보다 작아야 합니다.')
+    }
+    if (
+      startMs !== undefined &&
+      endMs !== undefined &&
+      startMs === 0 &&
+      endMs - startMs === UNSYNCED_CUE_DURATION_MS
+    ) {
+      addWarning(issues, cuePath, '아직 tap-sync가 입력되지 않은 cue입니다.')
     }
 
     const segmentItems = readArray(cue.segments, `${cuePath}.segments`, issues)
