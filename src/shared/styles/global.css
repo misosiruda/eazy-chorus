@@ -541,8 +541,7 @@ label {
 .lane-control-panel,
 .draft-queue-panel,
 .tap-sync-panel,
-.part-mark-editor-panel,
-.viewer-preview-panel {
+.part-mark-editor-panel {
   display: grid;
   gap: 12px;
 }
@@ -550,8 +549,7 @@ label {
 .lane-control-panel h3,
 .draft-queue-panel h3,
 .tap-sync-panel h3,
-.part-mark-editor-panel h3,
-.viewer-preview-panel h3 {
+.part-mark-editor-panel h3 {
   margin: 0;
   color: #334155;
   font-size: 0.92rem;
@@ -738,10 +736,29 @@ label {
   color: #64748b;
 }
 
+.viewer-mode-section {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 14px;
+}
+
+.viewer-mode-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.viewer-main {
+  position: relative;
+  min-height: 520px;
+}
+
 .viewer-lyrics-stage {
   display: grid;
-  gap: 4px;
-  max-height: 360px;
+  align-content: start;
+  gap: 8px;
+  height: min(62vh, 620px);
   padding: 14px;
   overflow: auto;
   border: 1px solid #dbe4f0;
@@ -750,9 +767,13 @@ label {
 }
 
 .viewer-cue {
-  justify-content: start;
-  min-height: 36px;
-  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+  min-height: 50px;
+  padding: 10px 12px;
   border-color: transparent;
   background: transparent;
   color: #cbd5e1;
@@ -769,6 +790,17 @@ label {
 .viewer-cue-active {
   background: #f8fafc;
   color: #0f172a;
+}
+
+.viewer-cue-range {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-cue-active .viewer-cue-range {
+  color: #2563eb;
 }
 
 .viewer-cue-text {
@@ -807,6 +839,177 @@ label {
 
 .part-mark-fragment-marked {
   border-radius: 3px;
+}
+
+.viewer-resume-scroll {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.viewer-resume-scroll:hover:not(:disabled) {
+  border-color: #0b5f59;
+  background: #0b5f59;
+  color: #ffffff;
+}
+
+.viewer-side-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+}
+
+.viewer-panel-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.viewer-panel-tabs button[aria-pressed='true'],
+.viewer-playbar button[aria-pressed='true'] {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.viewer-parts-panel,
+.viewer-mixer-panel,
+.viewer-track-list,
+.viewer-variant-list {
+  display: grid;
+  gap: 10px;
+}
+
+.viewer-parts-panel,
+.viewer-mixer-panel {
+  max-height: min(62vh, 620px);
+  overflow: auto;
+}
+
+.viewer-part-item,
+.viewer-track-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.viewer-part-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.viewer-part-heading strong,
+.viewer-track-row strong {
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.viewer-part-color {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+}
+
+.viewer-part-item p {
+  margin: 0;
+  color: #475569;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.viewer-part-item dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.viewer-part-item dl div {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.viewer-part-item dt {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.viewer-part-item dd {
+  margin: 0;
+  color: #334155;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.viewer-track-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.viewer-track-row span {
+  display: block;
+  color: #64748b;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.viewer-track-row input[type='range'] {
+  padding: 0;
+}
+
+.viewer-playbar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns:
+    minmax(76px, auto) minmax(86px, auto) minmax(180px, 1fr)
+    repeat(4, minmax(72px, auto)) minmax(92px, auto) minmax(150px, 0.8fr);
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
+.viewer-time {
+  display: grid;
+  gap: 2px;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-seek-control {
+  min-width: 0;
+}
+
+.viewer-seek-control input {
+  padding: 0;
+}
+
+.viewer-loop-state {
+  align-self: center;
+  color: #475569;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .validation-list + .validation-list {
@@ -887,8 +1090,28 @@ label {
   .tap-sync-actions,
   .part-mark-control-row,
   .segment-editor-row,
-  .cue-select-button {
+  .cue-select-button,
+  .viewer-mode-layout,
+  .viewer-cue,
+  .viewer-playbar {
     grid-template-columns: 1fr;
+  }
+
+  .viewer-main {
+    min-height: 58vh;
+  }
+
+  .viewer-lyrics-stage {
+    height: 58vh;
+  }
+
+  .viewer-parts-panel,
+  .viewer-mixer-panel {
+    max-height: 340px;
+  }
+
+  .viewer-playbar {
+    bottom: 8px;
   }
 
   .media-row,
