@@ -80,7 +80,7 @@ Mute/Solo/Volume은 실제 재생되는 MediaTrack 기준으로 적용한다.
 볼륨 계산 규칙:
 
 ```ts
-const hasSolo = tracks.some(track => track.solo)
+const hasSolo = tracks.some((track) => track.solo)
 
 function getEffectiveGain(track: MediaTrack) {
   if (!track.enabled) return 0
@@ -116,7 +116,8 @@ Part: 메인 보컬
 v1 기본 UX:
 
 - 하나의 Part에서 기본적으로 하나의 variant만 enabled 상태다.
-- 사용자는 믹서에서 variant를 전환할 수 있다.
+- 편집자는 Audio 단계에서 Part audio variant를 전환할 수 있다.
+- Preview/연습자 Mixer는 이미 연결된 track의 volume/mute/solo만 조절한다.
 - 고급 기능으로 여러 variant 동시 재생을 허용할 수 있지만, MVP 기본은 단일 선택이다.
 
 ## 9. 반복 재생
