@@ -615,6 +615,127 @@ describe('HomePage', () => {
     ).toHaveLength(1)
   })
 
+  it('adds a note to dragged lyrics for the selected Part in Notes', async () => {
+    const user = userEvent.setup()
+    renderHomePage()
+
+    await openEditorStep(user, 'Audio')
+    await user.selectOptions(screen.getAllByLabelText('Mark style')[0], [
+      'line-above',
+    ])
+    await confirmOneLyricDraft(user)
+    await assignDraftToLeadLane(user)
+    await openEditorStep(user, 'Notes')
+
+    const viewerStage = screen.getByLabelText('viewer lyrics document')
+    const viewerText = within(viewerStage).getByText('키미노 나오 욘다', {
+      selector: '.part-mark-fragment-text',
+    })
+    selectElementText(viewerText, 0, 2)
+    fireEvent.mouseUp(viewerStage)
+
+    const dialog = screen.getByRole('dialog', { name: 'Part Note' })
+    expect(within(dialog).getByText('키미')).toBeInTheDocument()
+    await user.type(
+      within(dialog).getByLabelText('Notes 주석 입력'),
+      '첫 호흡을 짧게',
+    )
+    await user.click(within(dialog).getByRole('button', { name: '저장' }))
+
+    expect(
+      screen.getByText('Main Vocal 주석 1개를 저장했습니다.'),
+    ).toBeInTheDocument()
+    const annotatedText = within(viewerStage).getByText('키미', {
+      selector: '.part-mark-fragment-text',
+    })
+    const annotatedFragment = annotatedText.closest('.part-mark-fragment')
+    expect(annotatedFragment).toHaveClass('part-mark-fragment-has-note')
+    expect(annotatedFragment?.querySelector('.part-mark-note-list')).toBeNull()
+    expect(
+      annotatedFragment?.querySelectorAll(
+        '.part-mark-line-stack-above .part-mark-line',
+      ),
+    ).toHaveLength(0)
+    expect(
+      annotatedFragment?.querySelectorAll(
+        '.part-mark-line-stack-below .part-mark-line',
+      ),
+    ).toHaveLength(0)
+    const noteIndicator = annotatedFragment?.querySelector<HTMLElement>(
+      '.part-mark-note-indicator',
+    )
+    expect(noteIndicator).not.toBeNull()
+    expect(noteIndicator?.style.getPropertyValue('--part-note-color')).toBe(
+      '#2563EB',
+    )
+    expect(
+      annotatedFragment?.querySelector('.part-mark-note-tooltip'),
+    ).toHaveTextContent('Main Vocal: 첫 호흡을 짧게')
+    expect(
+      screen.getByText('첫 호흡을 짧게', {
+        selector: '.preview-annotation-list span',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the harmony line continuous when a note is added inside the mark', async () => {
+    const user = userEvent.setup()
+    renderHomePage()
+
+    await openEditorStep(user, 'Audio')
+    await user.type(screen.getByLabelText('새 part 이름'), '3도 높은 화음')
+    await user.click(screen.getByRole('button', { name: 'Part 추가' }))
+    await user.selectOptions(
+      screen.getAllByLabelText('Mark style')[1],
+      'line-above',
+    )
+
+    await confirmOneLyricDraft(user)
+    await assignDraftToLeadLane(user)
+    await openEditorStep(user, 'Sub')
+
+    const harmonyDocument = screen.getByLabelText('sub lyric document')
+    await user.click(screen.getByRole('button', { name: /3도 높은 화음/ }))
+    selectElementText(harmonyDocument, 0, '키미노 나오 욘다'.length)
+    fireEvent.mouseUp(harmonyDocument)
+
+    await openEditorStep(user, 'Notes')
+
+    const viewerStage = screen.getByLabelText('viewer lyrics document')
+    const markedText = within(viewerStage).getByText('키미노 나오 욘다', {
+      selector: '.part-mark-fragment-text',
+    })
+    selectElementText(markedText, 0, 2)
+    fireEvent.mouseUp(viewerStage)
+
+    const dialog = screen.getByRole('dialog', { name: 'Part Note' })
+    await user.type(
+      within(dialog).getByLabelText('Notes 주석 입력'),
+      '첫 음정 확인',
+    )
+    await user.click(within(dialog).getByRole('button', { name: '저장' }))
+
+    const markedFragments = viewerStage.querySelectorAll(
+      '.part-mark-fragment-marked',
+    )
+    expect(markedFragments).toHaveLength(1)
+    expect(
+      Array.from(
+        markedFragments[0].querySelectorAll('.part-mark-fragment-text'),
+      )
+        .map((fragmentText) => fragmentText.textContent)
+        .join(''),
+    ).toBe('키미노 나오 욘다')
+    expect(
+      viewerStage.querySelectorAll(
+        '.part-mark-line-stack-above .part-mark-line',
+      ),
+    ).toHaveLength(1)
+    expect(
+      markedFragments[0].querySelector('.part-mark-note-indicator'),
+    ).not.toBeNull()
+  })
+
   it('keeps non-selected lyrics at normal opacity while highlighting a harmony Part', async () => {
     const user = userEvent.setup()
     renderHomePage()

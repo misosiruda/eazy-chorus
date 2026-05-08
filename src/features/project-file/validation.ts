@@ -542,6 +542,7 @@ function validatePartMarks(
     const endChar = requireNumber(mark.endChar, `${markPath}.endChar`, issues)
     optionalNumber(mark.lineIndex, `${markPath}.lineIndex`, issues)
     requireEnum(mark.style, MARK_STYLES, `${markPath}.style`, issues)
+    optionalString(mark.note, `${markPath}.note`, issues)
 
     if (!cueId || !segmentId) {
       return

@@ -270,7 +270,7 @@ type LyricSegment = {
 
 ## 13. PartMark
 
-PartMark는 독립 가사 텍스트가 아니라, 기존 가사 구간에 붙는 시각 표시다.
+PartMark는 독립 가사 텍스트가 아니라, 기존 가사 구간에 붙는 시각 표시 또는 Notes 주석이다.
 
 ```ts
 type PartMark = {
@@ -282,6 +282,7 @@ type PartMark = {
   startChar: number
   endChar: number
   style: 'line-above' | 'line-below' | 'highlight'
+  note?: string
 }
 ```
 
@@ -290,7 +291,9 @@ type PartMark = {
 - `startChar`는 inclusive다.
 - `endChar`는 exclusive다.
 - 하나의 segment 전체를 표시하려면 `startChar: 0`, `endChar: text.length`를 사용한다.
-- 같은 범위를 다시 드래그하면 동일 PartMark를 제거한다.
+- Sub 단계에서 같은 범위를 다시 드래그하면 동일 시각 PartMark를 제거한다.
+- `note`는 Notes 단계에서 편집자가 특정 Part와 가사 범위에 남기는 선택 주석이다.
+- `note`가 있는 PartMark는 주석 말풍선으로 표시하며, `style` 값은 Sub의 위줄/밑줄/형광펜 렌더링에 사용하지 않는다. 같은 범위에 Sub 표시가 필요하면 `note` 없는 별도 PartMark로 저장한다.
 
 ## 14. 예시 `project.json`
 

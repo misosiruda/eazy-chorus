@@ -116,6 +116,9 @@ Part Mark는 텍스트 위에 추가되는 시각 정보다.
 - 글자색은 Main/Sub 구분용으로 사용한다.
 - Part Mark는 글자색을 직접 바꾸지 않는다.
 - 같은 위치에 여러 Part Mark가 있으면 줄을 쌓거나 priority를 적용한다.
+- 편집자 Notes 단계에서는 선택한 Part에 대해 가사 범위를 드래그해 `PartMark.note` 주석을 남길 수 있다.
+- `PartMark.note`는 가사 본문에 항상 펼치지 않고 Part 색상의 주석 말풍선으로 표시한다. 말풍선을 hover하면 해당 가사 범위를 형광펜처럼 강조하고, 주석 본문을 tooltip으로 노출한다.
+- `PartMark.note`가 있는 항목은 Sub의 위줄/밑줄/형광펜 표시로 렌더링하지 않는다. Notes 드래그는 Sub 표시 토글과 분리한다.
 
 ## 7. Auto-scroll
 
