@@ -70,6 +70,7 @@ export function createNewProject(
         color: DEFAULT_PART_COLORS[0],
         guidePosition: 'none',
         defaultMarkStyle: 'highlight',
+        harmonyLevel: 1,
       },
     ],
     lyricDraft: [],
@@ -79,6 +80,7 @@ export function createNewProject(
         name: 'Lead',
         order: 1,
         defaultRole: 'main',
+        partId: 'main-vocal',
       },
     ],
     cues: [],
@@ -116,6 +118,7 @@ export function createPart({
       DEFAULT_PART_COLORS[existingParts.length % DEFAULT_PART_COLORS.length],
     guidePosition: 'none',
     defaultMarkStyle: defaultMarkStyleForIndex(existingParts.length),
+    harmonyLevel: 1,
   }
 }
 

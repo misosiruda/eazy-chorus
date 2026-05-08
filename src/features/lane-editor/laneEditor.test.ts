@@ -3,6 +3,8 @@ import {
   createLyricLane,
   findActiveCueIds,
   getNextCueId,
+  getNextSyncCueId,
+  getSyncCueSequence,
   getTimelineCues,
   placeAllDraftLinesOnLane,
   placeDraftLineOnLane,
@@ -59,7 +61,7 @@ describe('lane-editor feature', () => {
             id: 'cue-line-1-seg-1',
             role: 'main',
             text: '첫번째 가사',
-            partIds: [],
+            partIds: ['main-vocal'],
           },
         ],
       }),
@@ -137,5 +139,54 @@ describe('lane-editor feature', () => {
       'cue-sub',
     ])
     expect(findActiveCueIds(project, 2500)).toEqual(new Set(['cue-sub']))
+  })
+
+  it('orders sync cues by lyric source position instead of cue id or time', () => {
+    const project = {
+      ...createNewProject({
+        id: 'project-001',
+        now: new Date('2026-05-06T00:00:00.000Z'),
+      }),
+      cues: [
+        {
+          id: 'cue-lyric-selection-10-15',
+          laneId: 'lead',
+          startMs: 0,
+          endMs: 1,
+          sourceRange: { startChar: 10, endChar: 15 },
+          segments: [
+            {
+              id: 'cue-lyric-selection-10-15-seg-1',
+              role: 'main',
+              text: '두번째',
+              partIds: ['main-vocal'],
+            },
+          ],
+        },
+        {
+          id: 'cue-lyric-selection-2-7',
+          laneId: 'lead',
+          startMs: 9000,
+          endMs: 12000,
+          sourceRange: { startChar: 2, endChar: 7 },
+          segments: [
+            {
+              id: 'cue-lyric-selection-2-7-seg-1',
+              role: 'main',
+              text: '첫번째',
+              partIds: ['main-vocal'],
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(getSyncCueSequence(project).map((cue) => cue.id)).toEqual([
+      'cue-lyric-selection-2-7',
+      'cue-lyric-selection-10-15',
+    ])
+    expect(getNextSyncCueId(project, 'cue-lyric-selection-2-7')).toBe(
+      'cue-lyric-selection-10-15',
+    )
   })
 })

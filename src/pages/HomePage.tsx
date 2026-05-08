@@ -4,11 +4,13 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
 } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import {
   AudioPlaybackEngine,
   createMediaFilePathSet,
   getEffectiveTrackGain,
   getProjectDurationMs,
+  getSyncPlaybackTracks,
   selectPartAudioVariant,
   updateProjectWithDecodedDurations,
   type TrackDecodeResult,
@@ -22,16 +24,16 @@ import {
 } from '../features/lyrics-import'
 import {
   createLaneEditorSnapshot,
+  createCueFromTextSelection,
   createLyricLane,
   findActiveCueIds,
   getCueText,
   getLaneCueSequence,
-  getNextCueId,
-  getPreviousCueId,
+  getNextSyncCueId,
   getSortedLanes,
+  getSyncCueSequence,
   getTimelineCues,
-  placeAllDraftLinesOnLane,
-  placeDraftLineOnLane,
+  isCueOpenForSync,
   restoreLaneEditorSnapshot,
   syncCueEnd,
   syncCueStart,
@@ -41,7 +43,7 @@ import {
   getPartMarksForSegment,
   splitSegmentTextByPartMarks,
   togglePartMark,
-  updateCueSegmentRole,
+  type PartMarkTextFragment,
 } from '../features/part-editor'
 import {
   createMediaTrack,
@@ -53,7 +55,9 @@ import {
   importProjectPackage,
   type EazyChorusProject,
   type LyricCue,
-  type LyricRole,
+  type LyricCueSourceRange,
+  type LyricDraftLine,
+  type LyricLane,
   type MediaTrack,
   type MediaVariant,
   type Part,
@@ -75,10 +79,33 @@ import {
 
 type ProjectMetaTextField = 'title' | 'artist' | 'key' | 'memo'
 type WorkspaceMode = 'editor' | 'practice'
+type EditorWizardStep =
+  | 'project'
+  | 'audio'
+  | 'lyrics'
+  | 'lanes'
+  | 'harmony'
+  | 'sync'
+  | 'preview'
+type ViewerPartFocusMode = 'all' | 'lane' | 'marks'
 
-const WORKSPACE_MODE_OPTIONS: { value: WorkspaceMode; label: string }[] = [
-  { value: 'editor', label: '편집자' },
-  { value: 'practice', label: '연습자' },
+const WORKSPACE_PAGE_OPTIONS: {
+  value: WorkspaceMode
+  label: string
+  path: string
+}[] = [
+  { value: 'editor', label: '편집자', path: '/editor' },
+  { value: 'practice', label: '연습자', path: '/practice' },
+]
+
+const EDITOR_WIZARD_STEPS: { value: EditorWizardStep; label: string }[] = [
+  { value: 'project', label: 'Project' },
+  { value: 'audio', label: 'Audio' },
+  { value: 'lyrics', label: 'Lyrics' },
+  { value: 'lanes', label: 'Lane' },
+  { value: 'harmony', label: 'Sub' },
+  { value: 'sync', label: 'Sync' },
+  { value: 'preview', label: 'Preview' },
 ]
 
 const MEDIA_VARIANT_OPTIONS: { value: MediaVariant; label: string }[] = [
@@ -90,10 +117,6 @@ const MEDIA_VARIANT_OPTIONS: { value: MediaVariant; label: string }[] = [
 ]
 
 const PLAYBACK_RATE_OPTIONS = [0.75, 0.9, 1, 1.1]
-const LANE_ROLE_OPTIONS: { value: LyricRole; label: string }[] = [
-  { value: 'main', label: 'Main' },
-  { value: 'sub', label: 'Sub' },
-]
 const PART_MARK_STYLE_OPTIONS: {
   value: Part['defaultMarkStyle']
   label: string
@@ -110,6 +133,12 @@ const GUIDE_POSITION_OPTIONS: {
   { value: 'above', label: 'Above' },
   { value: 'below', label: 'Below' },
 ]
+const MIN_HARMONY_LEVEL = 1
+const MAX_HARMONY_LEVEL = 8
+const HARMONY_LEVEL_OPTIONS = Array.from(
+  { length: MAX_HARMONY_LEVEL - MIN_HARMONY_LEVEL + 1 },
+  (_, index) => MIN_HARMONY_LEVEL + index,
+)
 const SAMPLE_PROJECT_FILE_NAME = 'eazy-chorus-demo.eazychorus'
 const SAMPLE_PROJECT_URL = `${import.meta.env.BASE_URL}samples/${SAMPLE_PROJECT_FILE_NAME}`
 
@@ -119,7 +148,12 @@ type LaneEditorHistory = {
 }
 
 export function HomePage() {
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('editor')
+  const location = useLocation()
+  const workspaceMode: WorkspaceMode = location.pathname.startsWith('/practice')
+    ? 'practice'
+    : 'editor'
+  const [editorWizardStep, setEditorWizardStep] =
+    useState<EditorWizardStep>('project')
   const [project, setProject] = useState(() => createNewProject())
   const [mediaFiles, setMediaFiles] = useState<ProjectMediaFiles>({})
   const [selectedPartId, setSelectedPartId] = useState(
@@ -132,8 +166,14 @@ export function HomePage() {
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
   const [importBlocks, setImportBlocks] = useState<ImportBlock[]>([])
+  const [lyricDraftEditorState, setLyricDraftEditorState] = useState({
+    sourceText: '',
+    editorText: '',
+  })
   const [newLaneName, setNewLaneName] = useState('')
-  const [newLaneRole, setNewLaneRole] = useState<LyricRole>('main')
+  const [newLanePartId, setNewLanePartId] = useState(
+    () => project.parts[0]?.id ?? '',
+  )
   const [selectedLaneId, setSelectedLaneId] = useState(
     () => project.lyricLanes[0]?.id ?? '',
   )
@@ -145,6 +185,10 @@ export function HomePage() {
     },
   )
   const [isExporting, setIsExporting] = useState(false)
+  const [isProjectFileBusy, setIsProjectFileBusy] = useState(false)
+  const [projectFileBusyMessage, setProjectFileBusyMessage] = useState(
+    '프로젝트 파일을 처리하는 중입니다.',
+  )
   const [audioPositionMs, setAudioPositionMs] = useState(0)
   const [isAudioPlaying, setIsAudioPlaying] = useState(false)
   const [isAudioPreparing, setIsAudioPreparing] = useState(false)
@@ -153,6 +197,9 @@ export function HomePage() {
     () => project.settings.defaultPlaybackRate,
   )
   const [viewerPanel, setViewerPanel] = useState<ViewerPanel>('parts')
+  const [viewerFocusedPartId, setViewerFocusedPartId] = useState<string | null>(
+    null,
+  )
   const [viewerLoopMode, setViewerLoopMode] = useState<ViewerLoopMode>('off')
   const [abLoopStartMs, setAbLoopStartMs] = useState<number | null>(null)
   const [abLoopEndMs, setAbLoopEndMs] = useState<number | null>(null)
@@ -160,8 +207,7 @@ export function HomePage() {
   const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false)
   const audioEngineRef = useRef<AudioPlaybackEngine | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
-  const mrInputRef = useRef<HTMLInputElement | null>(null)
-  const partAudioInputRef = useRef<HTMLInputElement | null>(null)
+  const audioInputRef = useRef<HTMLInputElement | null>(null)
   const lyricSourcePreviewRef = useRef<HTMLDivElement | null>(null)
   const lyricExtractPreviewRef = useRef<HTMLDivElement | null>(null)
   const viewerStageRef = useRef<HTMLDivElement | null>(null)
@@ -184,25 +230,87 @@ export function HomePage() {
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const selectedPart =
     project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
+  const effectiveViewerFocusedPartId =
+    viewerFocusedPartId &&
+    project.parts.some((part) => part.id === viewerFocusedPartId)
+      ? viewerFocusedPartId
+      : null
   const audioDurationMs = getProjectDurationMs(project)
   const activeTrackCount = project.media.filter((track) => track.enabled).length
-  const lyricDraft = project.lyricDraft ?? []
+  const lyricDraft = project.lyricDraft
+  const lyricDraftDocumentText = lyricDraft.map((line) => line.text).join('\n')
+  const lyricDraftEditorText =
+    lyricDraftEditorState.sourceText === lyricDraftDocumentText
+      ? lyricDraftEditorState.editorText
+      : lyricDraftDocumentText
+  const lyricDraftLineRanges = useMemo(
+    () => createLyricDraftLineRanges(lyricDraft),
+    [lyricDraft],
+  )
   const sortedLanes = useMemo(() => getSortedLanes(project), [project])
   const selectedLane =
     sortedLanes.find((lane) => lane.id === selectedLaneId) ?? sortedLanes[0]
-  const selectedLaneCues = useMemo(
-    () => (selectedLane ? getLaneCueSequence(project, selectedLane.id) : []),
-    [project, selectedLane],
-  )
-  const selectedCue =
-    selectedLaneCues.find((cue) => cue.id === selectedCueId) ??
-    selectedLaneCues[0]
-  const selectedCueSegmentCount = selectedCue?.segments.length ?? 0
   const timelineCues = useMemo(() => getTimelineCues(project), [project])
+  const syncCues = useMemo(() => getSyncCueSequence(project), [project])
+  const selectedCue =
+    syncCues.find((cue) => cue.id === selectedCueId) ?? syncCues[0]
+  const lyricDocumentHighlights = useMemo(
+    () =>
+      createLyricDocumentHighlights({
+        documentText: lyricDraftDocumentText,
+        cues: timelineCues,
+        project,
+      }),
+    [lyricDraftDocumentText, project, timelineCues],
+  )
+  const lyricDocumentFragments = useMemo(
+    () =>
+      splitLyricDocumentByHighlights(
+        lyricDraftDocumentText,
+        lyricDocumentHighlights,
+      ),
+    [lyricDraftDocumentText, lyricDocumentHighlights],
+  )
+  const partMarkDocumentHighlights = useMemo(
+    () =>
+      createPartMarkDocumentHighlights({
+        documentText: lyricDraftDocumentText,
+        cues: timelineCues,
+        partMarks: project.partMarks.filter(
+          (mark) => mark.partId === selectedPartId,
+        ),
+        project,
+      }),
+    [lyricDraftDocumentText, project, selectedPartId, timelineCues],
+  )
+  const harmonyDocumentFragments = useMemo(
+    () =>
+      splitHarmonyDocumentByHighlights({
+        documentText: lyricDraftDocumentText,
+        partMarkHighlights: partMarkDocumentHighlights,
+      }),
+    [lyricDraftDocumentText, partMarkDocumentHighlights],
+  )
   const activeCueIds = useMemo(
     () => findActiveCueIds(project, audioPositionMs),
     [audioPositionMs, project],
   )
+  const viewerFocusedLaneIds = useMemo(
+    () =>
+      new Set(
+        effectiveViewerFocusedPartId
+          ? project.lyricLanes
+              .filter((lane) => lane.partId === effectiveViewerFocusedPartId)
+              .map((lane) => lane.id)
+          : [],
+      ),
+    [effectiveViewerFocusedPartId, project.lyricLanes],
+  )
+  const viewerPartFocusMode: ViewerPartFocusMode = effectiveViewerFocusedPartId
+    ? viewerFocusedLaneIds.size > 0
+      ? 'lane'
+      : 'marks'
+    : 'all'
   const activeTimelineCue = useMemo(
     () => getFirstActiveTimelineCue(project, audioPositionMs),
     [audioPositionMs, project],
@@ -215,8 +323,16 @@ export function HomePage() {
     startMs: abLoopStartMs,
     endMs: abLoopEndMs,
   })
+  const currentPlaybackTracks = useMemo(
+    () =>
+      workspaceMode === 'editor' && editorWizardStep === 'sync'
+        ? getSyncPlaybackTracks(project)
+        : project.media,
+    [editorWizardStep, project, workspaceMode],
+  )
   const canPlayProjectAudio =
-    project.media.length > 0 && validationErrors.length === 0
+    currentPlaybackTracks.some((track) => track.enabled) &&
+    validationErrors.length === 0
   const extractedLineCount = countExportedLines(importBlocks)
   const partVariantGroups = project.parts
     .map((part) => ({
@@ -228,7 +344,11 @@ export function HomePage() {
     .filter((group) => group.tracks.length > 0)
   const exportDisabled = isExporting || hasValidationErrors(validationIssues)
   const isEditorMode = workspaceMode === 'editor'
-  const workspaceTitle = isEditorMode ? 'Editor Workspace' : 'Practice Viewer'
+  const workspaceTitle = isEditorMode ? 'Editor Wizard' : 'Practice Viewer'
+  const editorWizardStepIndex = Math.max(
+    EDITOR_WIZARD_STEPS.findIndex((step) => step.value === editorWizardStep),
+    0,
+  )
 
   function applyDecodedDurations(decodedTracks: readonly TrackDecodeResult[]) {
     setProject((currentProject) =>
@@ -236,20 +356,70 @@ export function HomePage() {
     )
   }
 
+  function getEditorWizardStepSummary(step: EditorWizardStep): string {
+    if (step === 'project') {
+      return 'meta'
+    }
+
+    if (step === 'audio') {
+      return `media ${project.media.length}개 / part ${project.parts.length}개`
+    }
+
+    if (step === 'lyrics') {
+      return `draft ${lyricDraft.length}줄`
+    }
+
+    if (step === 'lanes') {
+      return `lane ${project.lyricLanes.length}개`
+    }
+
+    if (step === 'harmony') {
+      return `mark ${project.partMarks.length}개`
+    }
+
+    if (step === 'sync') {
+      const syncedCueCount = project.cues.filter(
+        (cue) => cue.endMs - cue.startMs > 1,
+      ).length
+      return `synced ${syncedCueCount}/${project.cues.length}`
+    }
+
+    return `error ${validationErrors.length}개`
+  }
+
+  function moveEditorWizardStep(direction: -1 | 1) {
+    const nextIndex = editorWizardStepIndex + direction
+    const nextStep = EDITOR_WIZARD_STEPS[nextIndex]
+    if (!nextStep) {
+      return
+    }
+
+    setEditorWizardStep(nextStep.value)
+  }
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) {
+      if (event.defaultPrevented) {
+        return
+      }
+
+      if (
+        isEditorMode &&
+        editorWizardStep === 'sync' &&
+        event.code === 'Space' &&
+        !isTextEntryKeyboardTarget(event.target)
+      ) {
+        event.preventDefault()
+        tapSelectedCueStart()
+        return
+      }
+
+      if (isEditableKeyboardTarget(event.target)) {
         return
       }
 
       if (isEditorMode) {
-        if (event.code === 'Space') {
-          event.preventDefault()
-          tapSelectedCueStart()
-          return
-        }
-
-        if (event.key.toLowerCase() === 'g') {
+        if (editorWizardStep === 'sync' && event.key.toLowerCase() === 'g') {
           event.preventDefault()
           tapSelectedCueEnd()
           return
@@ -303,7 +473,7 @@ export function HomePage() {
     const syncAudioEngine = async () => {
       try {
         const decodedTracks = await audioEngine.sync({
-          tracks: project.media,
+          tracks: currentPlaybackTracks,
           mediaFiles,
           playbackRate,
         })
@@ -316,7 +486,7 @@ export function HomePage() {
     }
 
     void syncAudioEngine()
-  }, [mediaFiles, playbackRate, project.media])
+  }, [currentPlaybackTracks, mediaFiles, playbackRate])
 
   useEffect(() => {
     if (!isAudioPlaying) {
@@ -412,14 +582,14 @@ export function HomePage() {
   }
 
   async function playAudio(positionMs = audioPositionMs) {
-    if (project.media.length === 0 || validationErrors.length > 0) {
+    if (!canPlayProjectAudio) {
       return
     }
 
     setIsAudioPreparing(true)
     try {
       const decodedTracks = await getAudioEngine().play({
-        tracks: project.media,
+        tracks: currentPlaybackTracks,
         mediaFiles,
         positionMs,
         playbackRate,
@@ -466,7 +636,7 @@ export function HomePage() {
     setIsAudioPreparing(true)
     try {
       const decodedTracks = await audioEngineRef.current.seek(nextPositionMs, {
-        tracks: project.media,
+        tracks: currentPlaybackTracks,
         mediaFiles,
         playbackRate,
       })
@@ -491,7 +661,7 @@ export function HomePage() {
     setLyricsSource('')
     setImportBlocks([])
     setNewLaneName('')
-    setNewLaneRole('main')
+    setNewLanePartId(nextProject.parts[0]?.id ?? '')
     setSelectedLaneId(nextProject.lyricLanes[0]?.id ?? '')
     setSelectedCueId('')
     setLaneEditorHistory({ past: [], future: [] })
@@ -500,6 +670,7 @@ export function HomePage() {
     setAudioError('')
     setPlaybackRate(nextProject.settings.defaultPlaybackRate)
     setViewerPanel('parts')
+    setViewerFocusedPartId(null)
     setViewerLoopMode('off')
     setAbLoopStartMs(null)
     setAbLoopEndMs(null)
@@ -545,6 +716,7 @@ export function HomePage() {
       }),
     )
     setSelectedPartId(nextPart.id)
+    setNewLanePartId(nextPart.id)
     setNewPartName('')
     setStatusMessage(`${nextPart.name} 파트를 추가했습니다.`)
   }
@@ -554,7 +726,12 @@ export function HomePage() {
     patch: Partial<
       Pick<
         Part,
-        'name' | 'color' | 'description' | 'guidePosition' | 'defaultMarkStyle'
+        | 'name'
+        | 'color'
+        | 'description'
+        | 'guidePosition'
+        | 'defaultMarkStyle'
+        | 'harmonyLevel'
       >
     >,
   ) {
@@ -568,62 +745,94 @@ export function HomePage() {
     )
   }
 
-  function updateSelectedCueSegmentRole(segmentId: string, role: LyricRole) {
-    if (!selectedCue) {
-      setStatusMessage('role을 편집할 cue가 없습니다.')
+  function removePart(partId: string) {
+    const part = project.parts.find((item) => item.id === partId)
+    if (!part) {
       return
     }
 
-    const nextProject = updateCueSegmentRole(project, {
-      cueId: selectedCue.id,
-      segmentId,
-      role,
-    })
-    if (nextProject === project) {
+    const linkedTrackCount = project.media.filter(
+      (track) => track.role === 'part-audio' && track.partId === partId,
+    ).length
+    if (linkedTrackCount > 0) {
+      setStatusMessage('연결된 음원을 먼저 제거한 뒤 Part를 제거하세요.')
       return
     }
 
-    commitLaneEditorProject(nextProject, `${role} segment role로 변경했습니다.`)
+    const fallbackPartId =
+      project.parts.find((item) => item.id !== partId)?.id ?? ''
+
+    setProject((currentProject) =>
+      touchProject(removePartReferences(currentProject, partId)),
+    )
+    setSelectedPartId((currentPartId) =>
+      currentPartId === partId ? fallbackPartId : currentPartId,
+    )
+    setNewLanePartId((currentPartId) =>
+      currentPartId === partId ? fallbackPartId : currentPartId,
+    )
+    setStatusMessage(`${part.name} part를 제거했습니다.`)
   }
 
-  function toggleSelectedPartMark(
-    event: MouseEvent<HTMLSpanElement>,
-    cueId: string,
-    segmentId: string,
+  function toggleSelectedPartMarkFromDocument(
+    event: MouseEvent<HTMLDivElement>,
   ) {
     if (!selectedPart) {
       setStatusMessage('Part Mark를 추가할 part가 없습니다.')
       return
     }
 
-    const textRange = getTextSelectionRange(event.currentTarget)
-    if (!textRange) {
+    const selectedRange = trimTextSelectionRange(
+      lyricDraftDocumentText,
+      getTextSelectionRange(event.currentTarget),
+    )
+    if (!selectedRange) {
+      setStatusMessage('왼쪽 가사에서 드래그로 Sub 범위를 선택하세요.')
       return
     }
 
-    const isRemoving = project.partMarks.some(
-      (mark) =>
-        mark.cueId === cueId &&
-        mark.segmentId === segmentId &&
-        mark.partId === selectedPart.id &&
-        mark.startChar === textRange.startChar &&
-        mark.endChar === textRange.endChar,
-    )
-    const nextProject = togglePartMark(project, {
-      cueId,
-      segmentId,
-      partId: selectedPart.id,
-      startChar: textRange.startChar,
-      endChar: textRange.endChar,
+    const markTargets = createPartMarkTargetsFromDocumentSelection({
+      documentText: lyricDraftDocumentText,
+      cues: timelineCues,
+      selectionRange: selectedRange,
     })
+    if (markTargets.length === 0) {
+      setStatusMessage(
+        'Lane에서 Main cue로 지정된 가사만 Sub 표시할 수 있습니다.',
+      )
+      return
+    }
+
+    const isRemoving = markTargets.every((target) =>
+      project.partMarks.some(
+        (mark) =>
+          mark.cueId === target.cueId &&
+          mark.segmentId === target.segmentId &&
+          mark.partId === selectedPart.id &&
+          mark.startChar === target.startChar &&
+          mark.endChar === target.endChar,
+      ),
+    )
+    const nextProject = markTargets.reduce(
+      (currentProject, target) =>
+        togglePartMark(currentProject, {
+          cueId: target.cueId,
+          segmentId: target.segmentId,
+          partId: selectedPart.id,
+          startChar: target.startChar,
+          endChar: target.endChar,
+        }),
+      project,
+    )
     if (nextProject === project) {
       return
     }
 
     commitLaneEditorProject(
       nextProject,
-      `${selectedPart.name} Part Mark를 ${isRemoving ? '제거' : '추가'}했습니다.`,
+      `${selectedPart.name} Sub를 ${isRemoving ? '제거' : '표시'}했습니다.`,
     )
+    setSelectedCueId(markTargets[0].cueId)
   }
 
   function extractLyricsSource() {
@@ -659,6 +868,23 @@ export function HomePage() {
         lyricDraft: nextDraft,
       },
       `${nextDraft.length}줄 lyric draft를 저장했습니다.`,
+    )
+  }
+
+  function saveLyricDraftEdit() {
+    const nextDraft = createLyricDraftFromEditedText(
+      lyricDraftEditorText,
+      lyricDraft,
+    )
+
+    commitLaneEditorProject(
+      {
+        ...project,
+        lyricDraft: nextDraft,
+      },
+      nextDraft.length > 0
+        ? `${nextDraft.length}줄 lyric draft를 수정했습니다.`
+        : 'lyric draft를 비웠습니다.',
     )
   }
 
@@ -702,10 +928,12 @@ export function HomePage() {
   }
 
   function addLyricLane() {
+    const lanePartId = newLanePartId || selectedPartId || project.parts[0]?.id
     const nextLane = createLyricLane({
       name: newLaneName,
-      defaultRole: newLaneRole,
+      defaultRole: 'main',
       existingLanes: project.lyricLanes,
+      partId: lanePartId,
     })
 
     commitLaneEditorProject(
@@ -716,52 +944,172 @@ export function HomePage() {
       `${nextLane.name} lane을 추가했습니다.`,
     )
     setSelectedLaneId(nextLane.id)
+    if (lanePartId) {
+      setSelectedPartId(lanePartId)
+    }
     setNewLaneName('')
   }
 
-  function placeDraftLine(draftLineId: string) {
-    if (!selectedLane) {
-      setStatusMessage('가사를 배치할 lane이 없습니다.')
+  function updateLyricLanePart(laneId: string, partId: string) {
+    const lane = project.lyricLanes.find((item) => item.id === laneId)
+    const part = project.parts.find((item) => item.id === partId)
+    if (!lane || !part) {
       return
     }
 
-    const nextProject = placeDraftLineOnLane(
-      project,
-      draftLineId,
-      selectedLane.id,
-    )
-    if (nextProject === project) {
-      setStatusMessage('선택한 lyric draft를 배치할 수 없습니다.')
-      return
-    }
-
-    const nextCue = nextProject.cues[nextProject.cues.length - 1]
     commitLaneEditorProject(
-      nextProject,
-      `${selectedLane.name} lane에 cue를 추가했습니다.`,
+      {
+        ...project,
+        lyricLanes: project.lyricLanes.map((item) =>
+          item.id === laneId ? { ...item, partId } : item,
+        ),
+        cues: project.cues.map((cue) =>
+          cue.laneId === laneId
+            ? {
+                ...cue,
+                segments: cue.segments.map((segment) =>
+                  segment.role === 'main'
+                    ? { ...segment, partIds: [partId] }
+                    : segment,
+                ),
+              }
+            : cue,
+        ),
+      },
+      `${lane.name} lane을 ${part.name} part에 연결했습니다.`,
     )
-    setSelectedCueId(nextCue?.id ?? '')
+    setSelectedLaneId(laneId)
+    setSelectedPartId(partId)
   }
 
-  function placeAllDraftLines() {
+  function assignLyricDocumentSelectionToLane(
+    event: MouseEvent<HTMLDivElement>,
+  ) {
     if (!selectedLane) {
-      setStatusMessage('가사를 배치할 lane이 없습니다.')
+      setStatusMessage('가사를 매칭할 lane이 없습니다.')
       return
     }
 
-    const draftCount = project.lyricDraft.length
-    const nextProject = placeAllDraftLinesOnLane(project, selectedLane.id)
-    if (nextProject === project) {
-      setStatusMessage('배치할 lyric draft가 없습니다.')
-      return
-    }
-
-    const firstAddedCue = nextProject.cues[project.cues.length]
-    commitLaneEditorProject(
-      nextProject,
-      `${selectedLane.name} lane에 ${draftCount}개 cue를 배치했습니다.`,
+    const selectedRange = trimTextSelectionRange(
+      lyricDraftDocumentText,
+      getTextSelectionRange(event.currentTarget),
     )
-    setSelectedCueId(firstAddedCue?.id ?? '')
+    if (!selectedRange) {
+      setStatusMessage('왼쪽 가사에서 드래그로 Main 범위를 선택하세요.')
+      return
+    }
+
+    const selectedLineRanges = splitRangeByLyricDraftLines({
+      documentText: lyricDraftDocumentText,
+      lineRanges: lyricDraftLineRanges,
+      range: selectedRange,
+    })
+    if (selectedLineRanges.length === 0) {
+      setStatusMessage('왼쪽 가사에서 드래그로 Main 범위를 선택하세요.')
+      return
+    }
+    const matchingHighlights = findMatchingLaneHighlights({
+      highlights: lyricDocumentHighlights,
+      laneId: selectedLane.id,
+      range: selectedRange,
+    })
+    const unmatchedLineRanges = selectedLineRanges.filter(
+      (range) =>
+        !matchingHighlights.some((highlight) =>
+          rangesOverlap(highlight, range),
+        ),
+    )
+    const shouldLinkExistingSelection =
+      matchingHighlights.length > 0 && unmatchedLineRanges.length > 0
+
+    if (shouldLinkExistingSelection) {
+      const linkId =
+        matchingHighlights.find((highlight) => highlight.linkId)?.linkId ??
+        createCueLinkId(selectedLane.id, selectedRange)
+      const matchingCueIds = new Set(
+        matchingHighlights.map((highlight) => highlight.id),
+      )
+      const linkedExistingCues = project.cues.map((cue) =>
+        matchingCueIds.has(cue.id) ? { ...cue, linkId } : cue,
+      )
+      const nextCues = createCuesForRanges({
+        documentText: lyricDraftDocumentText,
+        ranges: unmatchedLineRanges,
+        lane: selectedLane,
+        existingCues: linkedExistingCues,
+        linkId,
+      })
+
+      commitLaneEditorProject(
+        {
+          ...project,
+          cues: [...linkedExistingCues, ...nextCues],
+        },
+        `${selectedLane.name} lane에 Main 가사를 연결했습니다.`,
+      )
+      setSelectedCueId(matchingHighlights[0]?.id ?? nextCues[0]?.id ?? '')
+      return
+    }
+
+    if (matchingHighlights.length > 0) {
+      const replacementCueIds = new Set(
+        matchingHighlights.map((highlight) => highlight.id),
+      )
+      const retainedCues = project.cues.filter(
+        (cue) => !replacementCueIds.has(cue.id),
+      )
+      const replacementCues = matchingHighlights.flatMap((highlight) => {
+        const cue = project.cues.find((item) => item.id === highlight.id)
+
+        return cue
+          ? createCueReplacementsAfterRangeRemoval({
+              cue,
+              lane: selectedLane,
+              documentText: lyricDraftDocumentText,
+              lineRanges: lyricDraftLineRanges,
+              highlight,
+              removalRange: selectedRange,
+              existingCues: [...retainedCues, ...project.cues],
+            })
+          : []
+      })
+
+      commitLaneEditorProject(
+        {
+          ...project,
+          cues: [...retainedCues, ...replacementCues],
+          partMarks: project.partMarks.filter(
+            (mark) => !replacementCueIds.has(mark.cueId),
+          ),
+        },
+        replacementCues.length > 0
+          ? `${selectedLane.name} lane Main 하이라이트 일부를 해제했습니다.`
+          : `${selectedLane.name} lane Main 하이라이트를 해제했습니다.`,
+      )
+      setSelectedCueId(replacementCues[0]?.id ?? '')
+      return
+    }
+
+    const linkId =
+      selectedLineRanges.length > 1
+        ? createCueLinkId(selectedLane.id, selectedRange)
+        : undefined
+    const nextCues = createCuesForRanges({
+      documentText: lyricDraftDocumentText,
+      ranges: selectedLineRanges,
+      lane: selectedLane,
+      existingCues: project.cues,
+      linkId,
+    })
+
+    commitLaneEditorProject(
+      {
+        ...project,
+        cues: [...project.cues, ...nextCues],
+      },
+      `${selectedLane.name} lane에 Main 가사를 매칭했습니다.`,
+    )
+    setSelectedCueId(nextCues[0].id)
   }
 
   function tapSelectedCueStart() {
@@ -771,10 +1119,10 @@ export function HomePage() {
     }
 
     const nextProject = syncCueStart(project, selectedCue.id, audioPositionMs)
-    const nextCueId = getNextCueId(nextProject, selectedCue.id)
+    const nextCueId = getNextSyncCueId(nextProject, selectedCue.id)
     commitLaneEditorProject(
       nextProject,
-      `${formatDuration(audioPositionMs)}에 cue 시작을 입력했습니다.`,
+      `${formatDuration(audioPositionMs)}에 cue 시작을 입력했습니다. End는 다음 Space 또는 End 입력으로 정해집니다.`,
     )
     setSelectedCueId(nextCueId ?? selectedCue.id)
   }
@@ -790,20 +1138,6 @@ export function HomePage() {
       nextProject,
       `${formatDuration(audioPositionMs)}에 cue 종료를 입력했습니다.`,
     )
-  }
-
-  function selectAdjacentCue(direction: 'previous' | 'next') {
-    if (!selectedCue) {
-      return
-    }
-
-    const adjacentCueId =
-      direction === 'previous'
-        ? getPreviousCueId(project, selectedCue.id)
-        : getNextCueId(project, selectedCue.id)
-    if (adjacentCueId) {
-      setSelectedCueId(adjacentCueId)
-    }
   }
 
   function undoLaneEditorChange() {
@@ -845,106 +1179,340 @@ export function HomePage() {
     setStatusMessage('lane 편집을 다시 적용했습니다.')
   }
 
-  async function addMrFile(file: File | undefined) {
-    if (!file) {
+  function addAudioFiles(fileList: FileList | null | undefined) {
+    const files = Array.from(fileList ?? [])
+    if (files.length === 0) {
       return
     }
 
-    const track = createMediaTrack({
-      file,
-      role: 'mr',
-      variant: 'custom',
-      existingPaths: createExistingMediaPathSet(project),
-      defaultTitle: 'MR',
+    const existingPaths = createExistingMediaPathSet(project)
+    const uploadedItems: { file: File; track: MediaTrack }[] = []
+    let nextParts = [...project.parts]
+    const nextMedia = [...project.media]
+    const preparedPartIds = new Set<string>()
+    let firstPartId = ''
+    let hasMrTrack = project.media.some((track) => track.role === 'mr')
+
+    files.forEach((file) => {
+      if (!hasMrTrack && isLikelyMrAudioFile(file)) {
+        const track = createMediaTrack({
+          file,
+          role: 'mr',
+          existingPaths,
+        })
+        existingPaths.add(track.path)
+        nextMedia.push(track)
+        uploadedItems.push({ file, track })
+        hasMrTrack = true
+        return
+      }
+
+      const reusablePartIndex = findReusableAudioPartIndex(nextParts, nextMedia)
+      const partName = getAudioPartName(file)
+      let partId = ''
+
+      if (reusablePartIndex >= 0) {
+        const reusablePart = nextParts[reusablePartIndex]
+        partId = reusablePart.id
+        nextParts = nextParts.map((part, index) =>
+          index === reusablePartIndex
+            ? { ...part, name: partName || part.name }
+            : part,
+        )
+      } else {
+        const nextPart = createPart({
+          name: partName,
+          existingParts: nextParts,
+        })
+        partId = nextPart.id
+        nextParts = [...nextParts, nextPart]
+      }
+
+      const track = createMediaTrack({
+        file,
+        role: 'part-audio',
+        partId,
+        variant: selectedVariant,
+        existingPaths,
+      })
+      existingPaths.add(track.path)
+      const nextTrack = { ...track, enabled: true }
+      nextMedia.push(nextTrack)
+      uploadedItems.push({ file, track: nextTrack })
+      nextParts = nextParts.map((part) =>
+        part.id === partId ? { ...part, defaultTrackId: nextTrack.id } : part,
+      )
+
+      if (!firstPartId) {
+        firstPartId = partId
+      }
+      preparedPartIds.add(partId)
     })
 
     setProject((currentProject) =>
       touchProject({
         ...currentProject,
-        media: [
-          ...currentProject.media.filter((item) => item.role !== 'mr'),
-          track,
-        ],
+        parts: nextParts,
+        media: nextMedia,
       }),
     )
-    const previousMrPaths = project.media
-      .filter((item) => item.role === 'mr')
-      .map((item) => item.path)
     setMediaFiles((currentFiles) => {
       const nextFiles = { ...currentFiles }
-      previousMrPaths.forEach((path) => {
-        delete nextFiles[path]
+      uploadedItems.forEach(({ file, track }) => {
+        nextFiles[track.path] = file
       })
-      nextFiles[track.path] = file
       return nextFiles
     })
-    setStatusMessage(`${file.name} 파일을 MR로 추가했습니다.`)
-  }
-
-  async function addPartAudioFile(file: File | undefined) {
-    if (!file || !selectedPartId) {
-      return
+    if (firstPartId) {
+      setSelectedPartId(firstPartId)
+      setNewLanePartId(firstPartId)
     }
-
-    const selectedPart = project.parts.find(
-      (part) => part.id === selectedPartId,
+    setStatusMessage(
+      `${uploadedItems.length}개 음원을 추가하고 Part ${preparedPartIds.size}개를 준비했습니다.`,
     )
-    const track = createMediaTrack({
-      file,
-      role: 'part-audio',
-      partId: selectedPartId,
-      variant: selectedVariant,
-      existingPaths: createExistingMediaPathSet(project),
-      defaultTitle: selectedPart
-        ? `${selectedPart.name} ${selectedVariant}`
-        : undefined,
-    })
-
-    setProject((currentProject) =>
-      touchProject({
-        ...currentProject,
-        media: [
-          ...currentProject.media.map((item) =>
-            item.role === 'part-audio' && item.partId === selectedPartId
-              ? { ...item, enabled: false }
-              : item,
-          ),
-          track,
-        ],
-        parts: currentProject.parts.map((part) =>
-          part.id === selectedPartId
-            ? { ...part, defaultTrackId: track.id }
-            : part,
-        ),
-      }),
-    )
-    setMediaFiles((currentFiles) => ({
-      ...currentFiles,
-      [track.path]: file,
-    }))
-    setStatusMessage(`${file.name} 파일을 파트 음원으로 추가했습니다.`)
   }
 
   function removeMediaTrack(track: MediaTrack) {
     const nextPositionMs = clampPosition(audioPositionMs, audioDurationMs)
+    const remainingPartTracks =
+      track.role === 'part-audio' && track.partId
+        ? project.media.filter(
+            (item) =>
+              item.id !== track.id &&
+              item.role === 'part-audio' &&
+              item.partId === track.partId,
+          )
+        : []
+    const partToRemove =
+      track.role === 'part-audio' &&
+      track.partId &&
+      remainingPartTracks.length === 0
+        ? project.parts.find((part) => part.id === track.partId)
+        : null
+    const fallbackPartId = partToRemove
+      ? (project.parts.find((part) => part.id !== partToRemove.id)?.id ?? '')
+      : ''
+
     setProject((currentProject) =>
-      touchProject({
-        ...currentProject,
-        media: currentProject.media.filter((item) => item.id !== track.id),
-        parts: currentProject.parts.map((part) =>
-          part.defaultTrackId === track.id
-            ? { ...part, defaultTrackId: undefined }
-            : part,
+      touchProject(
+        maybeRemoveAudioPart(
+          {
+            ...currentProject,
+            media: currentProject.media.filter((item) => item.id !== track.id),
+            parts: currentProject.parts.map((part) => {
+              if (part.defaultTrackId !== track.id) {
+                return part
+              }
+
+              const fallbackTrack = currentProject.media.find(
+                (item) =>
+                  item.id !== track.id &&
+                  item.role === 'part-audio' &&
+                  item.partId === track.partId,
+              )
+              return { ...part, defaultTrackId: fallbackTrack?.id }
+            }),
+          },
+          track,
         ),
-      }),
+      ),
     )
+    if (partToRemove) {
+      setSelectedPartId((currentPartId) =>
+        currentPartId === partToRemove.id ? fallbackPartId : currentPartId,
+      )
+      setNewLanePartId((currentPartId) =>
+        currentPartId === partToRemove.id ? fallbackPartId : currentPartId,
+      )
+    }
     setMediaFiles((currentFiles) => {
       const nextFiles = { ...currentFiles }
       delete nextFiles[track.path]
       return nextFiles
     })
     setAudioPositionMs(nextPositionMs)
-    setStatusMessage(`${track.title} 음원을 제거했습니다.`)
+    setStatusMessage(
+      partToRemove
+        ? `${track.title} 음원과 ${partToRemove.name} part를 제거했습니다.`
+        : `${track.title} 음원을 제거했습니다.`,
+    )
+  }
+
+  function maybeRemoveAudioPart(
+    nextProject: EazyChorusProject,
+    removedTrack: MediaTrack,
+  ): EazyChorusProject {
+    if (!removedTrack.partId || removedTrack.role !== 'part-audio') {
+      return nextProject
+    }
+
+    const hasRemainingPartAudio = nextProject.media.some(
+      (track) =>
+        track.role === 'part-audio' && track.partId === removedTrack.partId,
+    )
+    return hasRemainingPartAudio
+      ? nextProject
+      : removePartReferences(nextProject, removedTrack.partId)
+  }
+
+  function removePartReferences(
+    currentProject: EazyChorusProject,
+    partId: string,
+  ): EazyChorusProject {
+    return {
+      ...currentProject,
+      parts: currentProject.parts.filter((item) => item.id !== partId),
+      lyricLanes: currentProject.lyricLanes.map((lane) => {
+        if (lane.partId !== partId) {
+          return lane
+        }
+
+        const laneWithoutPart: LyricLane = { ...lane }
+        delete laneWithoutPart.partId
+        return laneWithoutPart
+      }),
+      cues: currentProject.cues.map((cue) => ({
+        ...cue,
+        segments: cue.segments.map((segment) => ({
+          ...segment,
+          partIds: segment.partIds.filter((item) => item !== partId),
+        })),
+      })),
+      partMarks: currentProject.partMarks.filter(
+        (mark) => mark.partId !== partId,
+      ),
+    }
+  }
+
+  function updateMediaTrackRole(trackId: string, role: MediaTrack['role']) {
+    const fallbackPartId = selectedPartId || project.parts[0]?.id
+    if (role === 'part-audio' && !fallbackPartId) {
+      setStatusMessage('파트 음원으로 지정할 part가 없습니다.')
+      return
+    }
+
+    setProject((currentProject) => {
+      const nextFallbackPartId =
+        fallbackPartId || currentProject.parts[0]?.id || ''
+      const targetTrack = currentProject.media.find(
+        (track) => track.id === trackId,
+      )
+      if (!targetTrack || !nextFallbackPartId) {
+        return currentProject
+      }
+
+      const nextMedia =
+        role === 'mr'
+          ? currentProject.media.map((track) => {
+              if (track.id === trackId) {
+                const nextTrack: MediaTrack = {
+                  ...track,
+                  role: 'mr',
+                  enabled: true,
+                }
+                delete nextTrack.partId
+                return nextTrack
+              }
+
+              if (track.role === 'mr') {
+                return {
+                  ...track,
+                  role: 'part-audio' as const,
+                  partId: track.partId ?? nextFallbackPartId,
+                  variant: track.variant ?? selectedVariant,
+                  enabled: false,
+                }
+              }
+
+              return track
+            })
+          : currentProject.media.map((track) => {
+              if (track.id !== trackId) {
+                return track.role === 'part-audio' &&
+                  track.partId === nextFallbackPartId
+                  ? { ...track, enabled: false }
+                  : track
+              }
+
+              return {
+                ...track,
+                role: 'part-audio' as const,
+                partId: track.partId ?? nextFallbackPartId,
+                variant: track.variant ?? selectedVariant,
+                enabled: true,
+              }
+            })
+
+      return touchProject({
+        ...currentProject,
+        media: nextMedia,
+        parts: currentProject.parts.map((part) => {
+          if (role === 'mr' && part.defaultTrackId === trackId) {
+            return { ...part, defaultTrackId: undefined }
+          }
+
+          if (role === 'part-audio' && part.id === nextFallbackPartId) {
+            return { ...part, defaultTrackId: trackId }
+          }
+
+          return part
+        }),
+      })
+    })
+    setStatusMessage(
+      role === 'mr' ? 'MR 음원을 변경했습니다.' : '파트 음원으로 변경했습니다.',
+    )
+  }
+
+  function updateMediaTrackPart(trackId: string, partId: string) {
+    setProject((currentProject) =>
+      touchProject({
+        ...currentProject,
+        media: currentProject.media.map((track) => {
+          if (track.id === trackId) {
+            return {
+              ...track,
+              role: 'part-audio',
+              partId,
+              variant: track.variant ?? selectedVariant,
+              enabled: true,
+            }
+          }
+
+          if (track.role === 'part-audio' && track.partId === partId) {
+            return { ...track, enabled: false }
+          }
+
+          return track
+        }),
+        parts: currentProject.parts.map((part) => {
+          if (part.id === partId) {
+            return { ...part, defaultTrackId: trackId }
+          }
+
+          if (part.defaultTrackId === trackId) {
+            return { ...part, defaultTrackId: undefined }
+          }
+
+          return part
+        }),
+      }),
+    )
+    setSelectedPartId(partId)
+    setStatusMessage('파트 음원 연결을 변경했습니다.')
+  }
+
+  function updateMediaTrackVariant(trackId: string, variant: MediaVariant) {
+    setProject((currentProject) =>
+      touchProject({
+        ...currentProject,
+        media: currentProject.media.map((track) =>
+          track.id === trackId ? { ...track, variant } : track,
+        ),
+      }),
+    )
+    setSelectedVariant(variant)
+    setStatusMessage('음원 variant를 변경했습니다.')
   }
 
   function updateMediaTrackMix(
@@ -964,6 +1532,16 @@ export function HomePage() {
   function updatePartAudioVariant(partId: string, trackId: string | null) {
     setProject((currentProject) =>
       touchProject(selectPartAudioVariant(currentProject, partId, trackId)),
+    )
+  }
+
+  function toggleViewerPartFocus(part: Part) {
+    const shouldClearFocus = effectiveViewerFocusedPartId === part.id
+    setViewerFocusedPartId(shouldClearFocus ? null : part.id)
+    setStatusMessage(
+      shouldClearFocus
+        ? 'Viewer Part 강조를 해제했습니다.'
+        : `${part.name} Part만 강조합니다.`,
     )
   }
 
@@ -1051,7 +1629,7 @@ export function HomePage() {
     setStatusMessage(`${getCueText(loopTargetCue)} cue 반복을 켰습니다.`)
   }
 
-  function handleViewerScroll() {
+  function handleViewerManualScroll() {
     if (viewerAutoScrollingRef.current) {
       return
     }
@@ -1148,40 +1726,51 @@ export function HomePage() {
       return
     }
 
-    const result = await importProjectPackage(file)
-    setImportIssues(result.issues)
+    setProjectFileBusyMessage('프로젝트 파일을 여는 중입니다.')
+    setIsProjectFileBusy(true)
 
-    if (!result.package) {
-      setStatusMessage(
-        '프로젝트 파일을 열 수 없습니다. validation error를 확인하세요.',
-      )
-      return
+    try {
+      const result = await importProjectPackage(file)
+      setImportIssues(result.issues)
+
+      if (!result.package) {
+        setStatusMessage(
+          '프로젝트 파일을 열 수 없습니다. validation error를 확인하세요.',
+        )
+        return
+      }
+
+      audioEngineRef.current?.stop()
+      setProject(result.package.project)
+      setMediaFiles(result.package.mediaFiles)
+      setSelectedPartId(result.package.project.parts[0]?.id ?? '')
+      setNewLanePartId(result.package.project.parts[0]?.id ?? '')
+      setSelectedLaneId(result.package.project.lyricLanes[0]?.id ?? '')
+      setSelectedCueId(result.package.project.cues[0]?.id ?? '')
+      setLaneEditorHistory({ past: [], future: [] })
+      setAudioPositionMs(0)
+      setIsAudioPlaying(false)
+      setAudioError('')
+      setLyricsSource('')
+      setImportBlocks([])
+      setPlaybackRate(result.package.project.settings.defaultPlaybackRate)
+      setViewerPanel('parts')
+      setViewerFocusedPartId(null)
+      setViewerLoopMode('off')
+      setAbLoopStartMs(null)
+      setAbLoopEndMs(null)
+      setViewerCueLoopId(null)
+      setIsAutoScrollPaused(false)
+      setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
+    } finally {
+      setIsProjectFileBusy(false)
     }
-
-    audioEngineRef.current?.stop()
-    setProject(result.package.project)
-    setMediaFiles(result.package.mediaFiles)
-    setSelectedPartId(result.package.project.parts[0]?.id ?? '')
-    setSelectedLaneId(result.package.project.lyricLanes[0]?.id ?? '')
-    setSelectedCueId(result.package.project.cues[0]?.id ?? '')
-    setLaneEditorHistory({ past: [], future: [] })
-    setAudioPositionMs(0)
-    setIsAudioPlaying(false)
-    setAudioError('')
-    setLyricsSource('')
-    setImportBlocks([])
-    setPlaybackRate(result.package.project.settings.defaultPlaybackRate)
-    setViewerPanel('parts')
-    setViewerLoopMode('off')
-    setAbLoopStartMs(null)
-    setAbLoopEndMs(null)
-    setViewerCueLoopId(null)
-    setIsAutoScrollPaused(false)
-    setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
   }
 
   async function openSampleProject() {
     setStatusMessage('샘플 프로젝트를 불러오는 중입니다.')
+    setProjectFileBusyMessage('샘플 프로젝트를 여는 중입니다.')
+    setIsProjectFileBusy(true)
 
     try {
       const response = await fetch(SAMPLE_PROJECT_URL)
@@ -1198,12 +1787,16 @@ export function HomePage() {
       setStatusMessage(
         '샘플 프로젝트를 불러올 수 없습니다. 배포 파일 또는 네트워크 상태를 확인하세요.',
       )
+    } finally {
+      setIsProjectFileBusy(false)
     }
   }
 
   async function exportCurrentProject() {
     const projectToExport = touchProject(project)
     setIsExporting(true)
+    setProjectFileBusyMessage('프로젝트 파일을 저장하는 중입니다.')
+    setIsProjectFileBusy(true)
 
     try {
       const blob = await exportProjectPackage({
@@ -1222,579 +1815,812 @@ export function HomePage() {
       )
     } finally {
       setIsExporting(false)
+      setIsProjectFileBusy(false)
     }
   }
 
+  const hasAssignmentSidebar =
+    isEditorMode &&
+    (editorWizardStep === 'lanes' || editorWizardStep === 'harmony')
+  const workspaceGridClassName = isEditorMode
+    ? editorWizardStep === 'preview'
+      ? 'workspace-grid editor-wizard-grid editor-preview-grid'
+      : hasAssignmentSidebar
+        ? 'workspace-grid editor-wizard-grid editor-sidebar-grid'
+        : 'workspace-grid editor-wizard-grid'
+    : 'workspace-grid practice-grid'
+
   return (
     <main className="app-shell">
-      <header className="workspace-header">
-        <div className="workspace-title-stack">
-          <p className="app-kicker">Eazy Chorus</p>
-          <h1>{workspaceTitle}</h1>
-          <div className="workspace-mode-switch" aria-label="사용자 화면 선택">
-            {WORKSPACE_MODE_OPTIONS.map((option) => (
-              <button
-                type="button"
-                aria-pressed={workspaceMode === option.value}
-                onClick={() => setWorkspaceMode(option.value)}
-                key={option.value}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="workspace-actions" aria-label="프로젝트 파일 액션">
-          {isEditorMode ? (
-            <button type="button" onClick={resetToNewProject}>
-              새 프로젝트
-            </button>
-          ) : null}
-          <button type="button" onClick={() => importInputRef.current?.click()}>
-            파일 열기
-          </button>
-          <button type="button" onClick={() => void openSampleProject()}>
-            샘플 열기
-          </button>
-          {isEditorMode ? (
-            <button
-              type="button"
-              onClick={exportCurrentProject}
-              disabled={exportDisabled}
-            >
-              {isExporting ? '내보내는 중' : '.eazychorus 저장'}
-            </button>
-          ) : null}
-          <input
-            ref={importInputRef}
-            className="visually-hidden"
-            type="file"
-            accept=".eazychorus,application/zip"
-            aria-label=".eazychorus 프로젝트 파일 열기"
-            onChange={(event) => {
-              void handleImportFile(event.currentTarget.files?.[0])
-              event.currentTarget.value = ''
-            }}
-          />
-        </div>
-      </header>
-
-      <section className="status-strip" aria-live="polite">
-        <strong>{statusMessage}</strong>
-        <span>
-          {isEditorMode
-            ? `media ${project.media.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`
-            : `cue ${timelineCues.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`}
-        </span>
-      </section>
-
       <div
         className={
-          isEditorMode ? 'workspace-grid' : 'workspace-grid practice-grid'
+          isProjectFileBusy ? 'app-content app-content-busy' : 'app-content'
         }
+        aria-hidden={isProjectFileBusy}
       >
-        {isEditorMode ? (
-          <>
-            <section
-              className="workspace-section"
-              aria-labelledby="project-meta-title"
-            >
-              <div className="section-heading">
-                <h2 id="project-meta-title">Project Meta</h2>
-                <span>{project.project.id}</span>
-              </div>
-
-              <div className="form-grid">
-                <label>
-                  제목
-                  <input
-                    value={project.project.title}
-                    onChange={(event) =>
-                      updateProjectMeta('title', event.target.value)
-                    }
-                  />
-                </label>
-                <label>
-                  아티스트
-                  <input
-                    value={project.project.artist ?? ''}
-                    onChange={(event) =>
-                      updateProjectMeta('artist', event.target.value)
-                    }
-                  />
-                </label>
-                <label>
-                  Key
-                  <input
-                    value={project.project.key ?? ''}
-                    onChange={(event) =>
-                      updateProjectMeta('key', event.target.value)
-                    }
-                  />
-                </label>
-                <label>
-                  BPM
-                  <input
-                    type="number"
-                    min="1"
-                    value={project.project.bpm ?? ''}
-                    onChange={(event) => updateProjectBpm(event.target.value)}
-                  />
-                </label>
-                <label className="wide-field">
-                  메모
-                  <textarea
-                    value={project.project.memo ?? ''}
-                    rows={3}
-                    onChange={(event) =>
-                      updateProjectMeta('memo', event.target.value)
-                    }
-                  />
-                </label>
-              </div>
-            </section>
-
-            <section
-              className="workspace-section"
-              aria-labelledby="media-title"
-            >
-              <div className="section-heading">
-                <h2 id="media-title">Media</h2>
-                <span>ZIP 내부 media/ 경로로 저장</span>
-              </div>
-
-              <div className="media-import-row">
-                <button
-                  type="button"
-                  onClick={() => mrInputRef.current?.click()}
-                >
-                  MR 추가
-                </button>
-                <button
-                  type="button"
-                  onClick={() => partAudioInputRef.current?.click()}
-                  disabled={!selectedPartId}
-                >
-                  파트 음원 추가
-                </button>
-                <select
-                  aria-label="파트 음원 대상 파트"
-                  value={selectedPartId}
-                  onChange={(event) => setSelectedPartId(event.target.value)}
-                >
-                  {project.parts.map((part) => (
-                    <option value={part.id} key={part.id}>
-                      {part.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="파트 음원 variant"
-                  value={selectedVariant}
-                  onChange={(event) =>
-                    setSelectedVariant(event.target.value as MediaVariant)
+        <header className="workspace-header">
+          <div className="workspace-title-stack">
+            <p className="app-kicker">Eazy Chorus</p>
+            <h1>{workspaceTitle}</h1>
+            <nav className="workspace-page-nav" aria-label="페이지 이동">
+              {WORKSPACE_PAGE_OPTIONS.map((option) => (
+                <Link
+                  className={
+                    workspaceMode === option.value
+                      ? 'workspace-page-link workspace-page-link-active'
+                      : 'workspace-page-link'
                   }
+                  to={option.path}
+                  aria-current={
+                    workspaceMode === option.value ? 'page' : undefined
+                  }
+                  key={option.value}
                 >
-                  {MEDIA_VARIANT_OPTIONS.map((option) => (
-                    <option value={option.value} key={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  ref={mrInputRef}
-                  className="visually-hidden"
-                  type="file"
-                  accept="audio/*"
-                  aria-label="MR 파일 선택"
-                  onChange={(event) => {
-                    void addMrFile(event.currentTarget.files?.[0])
-                    event.currentTarget.value = ''
-                  }}
-                />
-                <input
-                  ref={partAudioInputRef}
-                  className="visually-hidden"
-                  type="file"
-                  accept="audio/*"
-                  aria-label="파트 음원 파일 선택"
-                  onChange={(event) => {
-                    void addPartAudioFile(event.currentTarget.files?.[0])
-                    event.currentTarget.value = ''
-                  }}
-                />
-              </div>
-
-              <div
-                className="media-table"
-                role="table"
-                aria-label="프로젝트 media 목록"
+                  {option.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+          <div className="workspace-actions" aria-label="프로젝트 파일 액션">
+            {isEditorMode ? (
+              <button
+                type="button"
+                onClick={resetToNewProject}
+                disabled={isProjectFileBusy}
               >
-                <div className="media-row media-row-head" role="row">
-                  <span role="columnheader">Role</span>
-                  <span role="columnheader">Title</span>
-                  <span role="columnheader">Path</span>
-                  <span role="columnheader">Size</span>
-                  <span role="columnheader">Action</span>
+                새 프로젝트
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              disabled={isProjectFileBusy}
+            >
+              파일 열기
+            </button>
+            <button
+              type="button"
+              onClick={() => void openSampleProject()}
+              disabled={isProjectFileBusy}
+            >
+              샘플 열기
+            </button>
+            {isEditorMode ? (
+              <button
+                type="button"
+                onClick={exportCurrentProject}
+                disabled={exportDisabled || isProjectFileBusy}
+              >
+                {isExporting ? '내보내는 중' : '.eazychorus 저장'}
+              </button>
+            ) : null}
+            <input
+              ref={importInputRef}
+              className="visually-hidden"
+              type="file"
+              accept=".eazychorus,application/zip"
+              aria-label=".eazychorus 프로젝트 파일 열기"
+              onChange={(event) => {
+                void handleImportFile(event.currentTarget.files?.[0])
+                event.currentTarget.value = ''
+              }}
+            />
+          </div>
+        </header>
+
+        <section className="status-strip" aria-live="polite">
+          <strong>{statusMessage}</strong>
+          <span>
+            {isEditorMode
+              ? `media ${project.media.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`
+              : `cue ${timelineCues.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`}
+          </span>
+        </section>
+
+        <div className={workspaceGridClassName}>
+          {isEditorMode ? (
+            <>
+              <section
+                className="editor-wizard-rail"
+                aria-labelledby="editor-wizard-title"
+              >
+                <div className="section-heading">
+                  <h2 id="editor-wizard-title">Steps</h2>
+                  <span>
+                    {editorWizardStepIndex + 1}/{EDITOR_WIZARD_STEPS.length}
+                  </span>
                 </div>
-                {project.media.map((track) => (
-                  <div className="media-row" role="row" key={track.id}>
-                    <span role="cell">
-                      {formatTrackRole(track, project.parts)}
-                    </span>
-                    <span role="cell">{track.title}</span>
-                    <span role="cell">{track.path}</span>
-                    <span role="cell">{formatBytes(track.sizeBytes)}</span>
-                    <span role="cell">
+
+                <div className="editor-wizard-steps" aria-label="편집 단계">
+                  {EDITOR_WIZARD_STEPS.map((step, index) => (
+                    <button
+                      className={
+                        step.value === editorWizardStep
+                          ? 'editor-wizard-step editor-wizard-step-active'
+                          : 'editor-wizard-step'
+                      }
+                      type="button"
+                      aria-current={
+                        step.value === editorWizardStep ? 'step' : undefined
+                      }
+                      aria-pressed={step.value === editorWizardStep}
+                      onClick={() => setEditorWizardStep(step.value)}
+                      key={step.value}
+                    >
+                      <span className="editor-wizard-step-number">
+                        {index + 1}
+                      </span>
+                      <span className="editor-wizard-step-copy">
+                        <strong>{step.label}</strong>
+                        <small>{getEditorWizardStepSummary(step.value)}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="editor-wizard-actions">
+                  <button
+                    type="button"
+                    onClick={() => moveEditorWizardStep(-1)}
+                    disabled={editorWizardStepIndex === 0}
+                  >
+                    이전
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveEditorWizardStep(1)}
+                    disabled={
+                      editorWizardStepIndex === EDITOR_WIZARD_STEPS.length - 1
+                    }
+                  >
+                    다음
+                  </button>
+                </div>
+              </section>
+
+              {editorWizardStep === 'project' ? (
+                <>
+                  <section
+                    className="workspace-section"
+                    aria-labelledby="project-meta-title"
+                  >
+                    <div className="section-heading">
+                      <h2 id="project-meta-title">Project Meta</h2>
+                      <span>{project.project.id}</span>
+                    </div>
+
+                    <div className="form-grid">
+                      <label>
+                        제목
+                        <input
+                          value={project.project.title}
+                          onChange={(event) =>
+                            updateProjectMeta('title', event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        아티스트
+                        <input
+                          value={project.project.artist ?? ''}
+                          onChange={(event) =>
+                            updateProjectMeta('artist', event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        Key
+                        <input
+                          value={project.project.key ?? ''}
+                          onChange={(event) =>
+                            updateProjectMeta('key', event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        BPM
+                        <input
+                          type="number"
+                          min="1"
+                          value={project.project.bpm ?? ''}
+                          onChange={(event) =>
+                            updateProjectBpm(event.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="wide-field">
+                        메모
+                        <textarea
+                          value={project.project.memo ?? ''}
+                          rows={3}
+                          onChange={(event) =>
+                            updateProjectMeta('memo', event.target.value)
+                          }
+                        />
+                      </label>
+                    </div>
+                  </section>
+                </>
+              ) : null}
+
+              {editorWizardStep === 'audio' ? (
+                <>
+                  <section
+                    className="workspace-section"
+                    aria-labelledby="media-title"
+                  >
+                    <div className="section-heading">
+                      <h2 id="media-title">Media</h2>
+                      <span>ZIP 내부 media/ 경로로 저장</span>
+                    </div>
+
+                    <div className="media-import-row">
                       <button
                         type="button"
-                        onClick={() => removeMediaTrack(track)}
+                        onClick={() => audioInputRef.current?.click()}
                       >
-                        제거
+                        음원 추가
                       </button>
-                    </span>
-                  </div>
-                ))}
-                {project.media.length === 0 ? (
-                  <p className="empty-state">MR과 보컬 음원을 추가하세요.</p>
-                ) : null}
-              </div>
-            </section>
-
-            <section
-              className="workspace-section"
-              aria-labelledby="audio-title"
-            >
-              <div className="section-heading">
-                <h2 id="audio-title">Audio Engine</h2>
-                <span>
-                  active {activeTrackCount}개 / decoded duration{' '}
-                  {formatDuration(audioDurationMs)}
-                </span>
-              </div>
-
-              <div className="transport-panel">
-                <div
-                  className="transport-actions"
-                  aria-label="오디오 재생 컨트롤"
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      isAudioPlaying ? pauseAudio() : void playAudio()
-                    }
-                    disabled={
-                      isAudioPreparing ||
-                      project.media.length === 0 ||
-                      validationErrors.length > 0
-                    }
-                  >
-                    {isAudioPlaying ? '일시정지' : '재생'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopAudio}
-                    disabled={isAudioPreparing || project.media.length === 0}
-                  >
-                    정지
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void replayAudio()}
-                    disabled={
-                      isAudioPreparing ||
-                      project.media.length === 0 ||
-                      validationErrors.length > 0
-                    }
-                  >
-                    처음부터
-                  </button>
-                  <label>
-                    속도
-                    <select
-                      value={playbackRate}
-                      onChange={(event) =>
-                        setPlaybackRate(Number(event.target.value))
-                      }
-                    >
-                      {PLAYBACK_RATE_OPTIONS.map((rate) => (
-                        <option value={rate} key={rate}>
-                          {rate}x
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <label className="seek-control">
-                  Seek
-                  <input
-                    type="range"
-                    min="0"
-                    max={Math.max(audioDurationMs, 1)}
-                    step="100"
-                    value={clampPosition(audioPositionMs, audioDurationMs)}
-                    disabled={audioDurationMs === 0}
-                    onChange={(event) =>
-                      void seekAudio(Number(event.target.value))
-                    }
-                  />
-                </label>
-                <div className="transport-time">
-                  <span>{formatDuration(audioPositionMs)}</span>
-                  <span>{formatDuration(audioDurationMs)}</span>
-                </div>
-                {audioError ? (
-                  <p className="audio-error" role="alert">
-                    {audioError}
-                  </p>
-                ) : null}
-              </div>
-
-              {partVariantGroups.length > 0 ? (
-                <div className="variant-switcher">
-                  <h3>Part audio variant</h3>
-                  {partVariantGroups.map(({ part, tracks }) => (
-                    <label key={part.id}>
-                      {part.name}
                       <select
-                        value={
-                          tracks.find((track) => track.enabled)?.id ??
-                          part.defaultTrackId ??
-                          ''
-                        }
+                        aria-label="업로드 기본 variant"
+                        value={selectedVariant}
                         onChange={(event) =>
-                          updatePartAudioVariant(part.id, event.target.value)
+                          setSelectedVariant(event.target.value as MediaVariant)
                         }
                       >
-                        <option value="">사용 안 함</option>
-                        {tracks.map((track) => (
-                          <option value={track.id} key={track.id}>
-                            {track.title} / {track.variant ?? 'custom'}
+                        {MEDIA_VARIANT_OPTIONS.map((option) => (
+                          <option value={option.value} key={option.value}>
+                            {option.label}
                           </option>
                         ))}
                       </select>
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="mixer-table" aria-label="오디오 믹서">
-                {project.media.map((track) => (
-                  <div className="mixer-row" key={track.id}>
-                    <div>
-                      <strong>{track.title}</strong>
-                      <span>
-                        {formatTrackRole(track, project.parts)} · gain{' '}
-                        {getEffectiveTrackGain(track, project.media).toFixed(2)}
-                      </span>
+                      <input
+                        ref={audioInputRef}
+                        className="visually-hidden"
+                        type="file"
+                        accept="audio/*"
+                        multiple
+                        aria-label="오디오 파일 선택"
+                        onChange={(event) => {
+                          addAudioFiles(event.currentTarget.files)
+                          event.currentTarget.value = ''
+                        }}
+                      />
                     </div>
-                    <label>
-                      Volume
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={track.volume}
-                        onChange={(event) =>
-                          updateMediaTrackMix(track.id, {
-                            volume: Number(event.target.value),
-                          })
-                        }
-                      />
-                    </label>
-                    <label className="inline-check">
-                      <input
-                        type="checkbox"
-                        checked={track.muted}
-                        onChange={(event) =>
-                          updateMediaTrackMix(track.id, {
-                            muted: event.target.checked,
-                          })
-                        }
-                      />
-                      Mute
-                    </label>
-                    <label className="inline-check">
-                      <input
-                        type="checkbox"
-                        checked={track.solo}
-                        onChange={(event) =>
-                          updateMediaTrackMix(track.id, {
-                            solo: event.target.checked,
-                          })
-                        }
-                      />
-                      Solo
-                    </label>
-                    {track.role === 'mr' ? (
-                      <label className="inline-check">
-                        <input
-                          type="checkbox"
-                          checked={track.enabled}
-                          onChange={(event) =>
-                            updateMediaTrackMix(track.id, {
-                              enabled: event.target.checked,
-                            })
-                          }
-                        />
-                        Active
-                      </label>
-                    ) : (
-                      <span className="variant-state">
-                        {track.enabled ? 'Active variant' : 'Inactive variant'}
-                      </span>
-                    )}
-                  </div>
-                ))}
-                {project.media.length === 0 ? (
-                  <p className="empty-state">
-                    음원을 추가하면 Web Audio 재생과 믹서 컨트롤을 사용할 수
-                    있습니다.
-                  </p>
-                ) : null}
-              </div>
-            </section>
 
-            <section
-              className="workspace-section lyric-import-section"
-              aria-labelledby="lyrics-import-title"
-            >
-              <div className="section-heading">
-                <h2 id="lyrics-import-title">Lyric Import</h2>
-                <span>
-                  draft {lyricDraft.length}줄 / block {importBlocks.length}개
-                </span>
-              </div>
-
-              <label className="wide-field">
-                원본 가사 붙여넣기
-                <textarea
-                  value={lyricsSource}
-                  rows={8}
-                  placeholder="일본어 가사&#10;한글 차음&#10;한국어 해석"
-                  onChange={(event) => setLyricsSource(event.target.value)}
-                />
-              </label>
-
-              <div className="lyric-import-actions">
-                <button type="button" onClick={extractLyricsSource}>
-                  가사 추출
-                </button>
-                <button
-                  type="button"
-                  onClick={confirmLyricsImport}
-                  disabled={extractedLineCount === 0}
-                >
-                  추출 결과 확정
-                </button>
-                <span>{extractedLineCount}줄 추출됨</span>
-              </div>
-
-              {importBlocks.length > 0 ? (
-                <div className="lyric-confirm-grid">
-                  <div>
-                    <h3>원본 가사</h3>
                     <div
-                      ref={lyricSourcePreviewRef}
-                      className="lyric-scroll-column"
-                      role="region"
-                      aria-label="원본 가사 비교"
-                      onScroll={() => syncLyricPreviewScroll('source')}
+                      className="media-table"
+                      role="table"
+                      aria-label="프로젝트 media 목록"
                     >
-                      {importBlocks.map((block, index) => (
-                        <div
-                          className={`lyric-import-block lyric-import-block-${block.confidence}`}
-                          key={block.id}
-                        >
-                          <div className="lyric-block-meta">
-                            #{index + 1} {block.pattern} / {block.confidence}
-                          </div>
-                          {block.sourceLines.map((line, lineIndex) => (
-                            <p key={`${block.id}-source-${lineIndex}`}>
-                              {line}
-                            </p>
-                          ))}
-                          {block.warnings.length > 0 ? (
-                            <ul>
-                              {block.warnings.map((warning) => (
-                                <li key={warning}>{warning}</li>
-                              ))}
-                            </ul>
-                          ) : null}
+                      <div className="media-row media-row-head" role="row">
+                        <span role="columnheader">Role</span>
+                        <span role="columnheader">Title</span>
+                        <span role="columnheader">Part</span>
+                        <span role="columnheader">Variant</span>
+                        <span role="columnheader">Path</span>
+                        <span role="columnheader">Size</span>
+                        <span role="columnheader">Action</span>
+                      </div>
+                      {project.media.map((track) => (
+                        <div className="media-row" role="row" key={track.id}>
+                          <span role="cell">
+                            <select
+                              aria-label={`${track.title} 역할`}
+                              value={track.role}
+                              onChange={(event) =>
+                                updateMediaTrackRole(
+                                  track.id,
+                                  event.target.value as MediaTrack['role'],
+                                )
+                              }
+                            >
+                              <option value="part-audio">파트 음원</option>
+                              <option value="mr">MR</option>
+                            </select>
+                          </span>
+                          <span role="cell">{track.title}</span>
+                          <span role="cell">
+                            {track.role === 'part-audio' ? (
+                              <select
+                                aria-label={`${track.title} 파트 연결`}
+                                value={track.partId ?? ''}
+                                onChange={(event) =>
+                                  updateMediaTrackPart(
+                                    track.id,
+                                    event.target.value,
+                                  )
+                                }
+                              >
+                                {project.parts.map((part) => (
+                                  <option value={part.id} key={part.id}>
+                                    {part.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="media-assignment-note">
+                                MR로 사용
+                              </span>
+                            )}
+                          </span>
+                          <span role="cell">
+                            {track.role === 'part-audio' ? (
+                              <select
+                                aria-label={`${track.title} variant`}
+                                value={track.variant ?? 'custom'}
+                                onChange={(event) =>
+                                  updateMediaTrackVariant(
+                                    track.id,
+                                    event.target.value as MediaVariant,
+                                  )
+                                }
+                              >
+                                {MEDIA_VARIANT_OPTIONS.map((option) => (
+                                  <option
+                                    value={option.value}
+                                    key={option.value}
+                                  >
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className="media-assignment-note">-</span>
+                            )}
+                          </span>
+                          <span role="cell">{track.path}</span>
+                          <span role="cell">
+                            {formatBytes(track.sizeBytes)}
+                          </span>
+                          <span role="cell">
+                            <button
+                              type="button"
+                              aria-label={`${track.title} 음원 제거`}
+                              onClick={() => removeMediaTrack(track)}
+                            >
+                              제거
+                            </button>
+                          </span>
                         </div>
                       ))}
+                      {project.media.length === 0 ? (
+                        <p className="empty-state">
+                          MR과 보컬 음원을 추가하세요.
+                        </p>
+                      ) : null}
                     </div>
-                  </div>
+                  </section>
 
-                  <div>
-                    <h3>추출된 가사</h3>
-                    <div
-                      ref={lyricExtractPreviewRef}
-                      className="lyric-scroll-column"
-                      role="region"
-                      aria-label="추출된 가사 편집"
-                      onScroll={() => syncLyricPreviewScroll('extract')}
-                    >
-                      {importBlocks.map((block, index) => (
-                        <label
-                          className={`lyric-import-block lyric-import-block-${block.confidence}`}
-                          key={block.id}
-                        >
-                          추출 block {index + 1}
-                          <textarea
-                            rows={Math.max(2, block.exportedLines.length)}
-                            value={block.exportedLines.join('\n')}
-                            onChange={(event) =>
-                              updateImportBlockExport(
-                                block.id,
-                                event.target.value,
-                              )
-                            }
-                          />
-                        </label>
-                      ))}
+                  <section
+                    className="workspace-section"
+                    aria-labelledby="audio-title"
+                  >
+                    <div className="section-heading">
+                      <h2 id="audio-title">Audio Engine</h2>
+                      <span>
+                        active {activeTrackCount}개 / decoded duration{' '}
+                        {formatDuration(audioDurationMs)}
+                      </span>
                     </div>
-                  </div>
-                </div>
+
+                    <div className="transport-panel">
+                      <div
+                        className="transport-actions"
+                        aria-label="오디오 재생 컨트롤"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            isAudioPlaying ? pauseAudio() : void playAudio()
+                          }
+                          disabled={isAudioPreparing || !canPlayProjectAudio}
+                        >
+                          {isAudioPlaying ? '일시정지' : '재생'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={stopAudio}
+                          disabled={
+                            isAudioPreparing || project.media.length === 0
+                          }
+                        >
+                          정지
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void replayAudio()}
+                          disabled={isAudioPreparing || !canPlayProjectAudio}
+                        >
+                          처음부터
+                        </button>
+                        <label>
+                          속도
+                          <select
+                            value={playbackRate}
+                            onChange={(event) =>
+                              setPlaybackRate(Number(event.target.value))
+                            }
+                          >
+                            {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                              <option value={rate} key={rate}>
+                                {rate}x
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      <label className="seek-control">
+                        Seek
+                        <input
+                          type="range"
+                          min="0"
+                          max={Math.max(audioDurationMs, 1)}
+                          step="100"
+                          value={clampPosition(
+                            audioPositionMs,
+                            audioDurationMs,
+                          )}
+                          disabled={audioDurationMs === 0}
+                          onChange={(event) =>
+                            void seekAudio(Number(event.target.value))
+                          }
+                        />
+                      </label>
+                      <div className="transport-time">
+                        <span>{formatDuration(audioPositionMs)}</span>
+                        <span>{formatDuration(audioDurationMs)}</span>
+                      </div>
+                      {audioError ? (
+                        <p className="audio-error" role="alert">
+                          {audioError}
+                        </p>
+                      ) : null}
+                    </div>
+
+                    {partVariantGroups.length > 0 ? (
+                      <div className="variant-switcher">
+                        <h3>Part audio variant</h3>
+                        {partVariantGroups.map(({ part, tracks }) => (
+                          <label key={part.id}>
+                            {part.name}
+                            <select
+                              value={
+                                tracks.find((track) => track.enabled)?.id ??
+                                part.defaultTrackId ??
+                                ''
+                              }
+                              onChange={(event) =>
+                                updatePartAudioVariant(
+                                  part.id,
+                                  event.target.value,
+                                )
+                              }
+                            >
+                              <option value="">사용 안 함</option>
+                              {tracks.map((track) => (
+                                <option value={track.id} key={track.id}>
+                                  {track.title} / {track.variant ?? 'custom'}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <div className="mixer-table" aria-label="오디오 믹서">
+                      {project.media.map((track) => (
+                        <div className="mixer-row" key={track.id}>
+                          <div>
+                            <strong>{track.title}</strong>
+                            <span>
+                              {formatTrackRole(track, project.parts)} · gain{' '}
+                              {getEffectiveTrackGain(
+                                track,
+                                project.media,
+                              ).toFixed(2)}
+                            </span>
+                          </div>
+                          <label>
+                            Volume
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              value={track.volume}
+                              onChange={(event) =>
+                                updateMediaTrackMix(track.id, {
+                                  volume: Number(event.target.value),
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="inline-check">
+                            <input
+                              type="checkbox"
+                              checked={track.muted}
+                              onChange={(event) =>
+                                updateMediaTrackMix(track.id, {
+                                  muted: event.target.checked,
+                                })
+                              }
+                            />
+                            Mute
+                          </label>
+                          <label className="inline-check">
+                            <input
+                              type="checkbox"
+                              checked={track.solo}
+                              onChange={(event) =>
+                                updateMediaTrackMix(track.id, {
+                                  solo: event.target.checked,
+                                })
+                              }
+                            />
+                            Solo
+                          </label>
+                          {track.role === 'mr' ? (
+                            <label className="inline-check">
+                              <input
+                                type="checkbox"
+                                checked={track.enabled}
+                                onChange={(event) =>
+                                  updateMediaTrackMix(track.id, {
+                                    enabled: event.target.checked,
+                                  })
+                                }
+                              />
+                              Active
+                            </label>
+                          ) : (
+                            <span className="variant-state">
+                              {track.enabled
+                                ? 'Active variant'
+                                : 'Inactive variant'}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                      {project.media.length === 0 ? (
+                        <p className="empty-state">
+                          음원을 추가하면 Web Audio 재생과 믹서 컨트롤을 사용할
+                          수 있습니다.
+                        </p>
+                      ) : null}
+                    </div>
+                  </section>
+                </>
               ) : null}
 
-              {lyricDraft.length > 0 ? (
-                <div className="lyric-draft-preview">
-                  <h3>Lyric draft</h3>
-                  <ol>
-                    {lyricDraft.slice(0, 8).map((line) => (
-                      <li key={line.id}>{line.text}</li>
-                    ))}
-                  </ol>
-                  {lyricDraft.length > 8 ? (
-                    <p>외 {lyricDraft.length - 8}줄</p>
+              {editorWizardStep === 'lyrics' ? (
+                <section
+                  className="workspace-section lyric-import-section"
+                  aria-labelledby="lyrics-import-title"
+                >
+                  <div className="section-heading">
+                    <h2 id="lyrics-import-title">Lyric Import</h2>
+                    <span>
+                      draft {lyricDraft.length}줄 / block {importBlocks.length}
+                      개
+                    </span>
+                  </div>
+
+                  <label className="wide-field">
+                    원본 가사 붙여넣기
+                    <textarea
+                      value={lyricsSource}
+                      rows={8}
+                      placeholder="일본어 가사&#10;한글 차음&#10;한국어 해석"
+                      onChange={(event) => setLyricsSource(event.target.value)}
+                    />
+                  </label>
+
+                  <div className="lyric-import-actions">
+                    <button type="button" onClick={extractLyricsSource}>
+                      가사 추출
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmLyricsImport}
+                      disabled={extractedLineCount === 0}
+                    >
+                      추출 결과 확정
+                    </button>
+                    <span>{extractedLineCount}줄 추출됨</span>
+                  </div>
+
+                  {importBlocks.length > 0 ? (
+                    <div className="lyric-confirm-grid">
+                      <div>
+                        <h3>원본 가사</h3>
+                        <div
+                          ref={lyricSourcePreviewRef}
+                          className="lyric-scroll-column"
+                          role="region"
+                          aria-label="원본 가사 비교"
+                          onScroll={() => syncLyricPreviewScroll('source')}
+                        >
+                          {importBlocks.map((block, index) => (
+                            <div
+                              className={`lyric-import-block lyric-import-block-${block.confidence}`}
+                              key={block.id}
+                            >
+                              <div className="lyric-block-meta">
+                                #{index + 1} {block.pattern} /{' '}
+                                {block.confidence}
+                              </div>
+                              {block.sourceLines.map((line, lineIndex) => (
+                                <p key={`${block.id}-source-${lineIndex}`}>
+                                  {line}
+                                </p>
+                              ))}
+                              {block.warnings.length > 0 ? (
+                                <ul>
+                                  {block.warnings.map((warning) => (
+                                    <li key={warning}>{warning}</li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3>추출된 가사</h3>
+                        <div
+                          ref={lyricExtractPreviewRef}
+                          className="lyric-scroll-column"
+                          role="region"
+                          aria-label="추출된 가사 편집"
+                          onScroll={() => syncLyricPreviewScroll('extract')}
+                        >
+                          {importBlocks.map((block, index) => (
+                            <label
+                              className={`lyric-import-block lyric-import-block-${block.confidence}`}
+                              key={block.id}
+                            >
+                              추출 block {index + 1}
+                              <textarea
+                                rows={Math.max(2, block.exportedLines.length)}
+                                value={block.exportedLines.join('\n')}
+                                onChange={(event) =>
+                                  updateImportBlockExport(
+                                    block.id,
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   ) : null}
-                </div>
-              ) : (
-                <p className="empty-state">
-                  확정된 lyric draft가 없습니다. 추출 결과를 확인한 뒤
-                  저장하세요.
-                </p>
-              )}
-            </section>
 
-            <section
-              className="workspace-section lane-editor-section"
-              aria-labelledby="lane-editor-title"
-            >
-              <div className="section-heading">
-                <h2 id="lane-editor-title">Lane & Tap Sync</h2>
-                <span>
-                  lane {project.lyricLanes.length}개 / cue {project.cues.length}
-                  개
-                </span>
-              </div>
+                  {lyricDraft.length > 0 ? (
+                    <div className="lyric-draft-preview">
+                      <div className="panel-title-row">
+                        <h3>Lyric draft</h3>
+                        <span>{lyricDraft.length}줄</span>
+                      </div>
+                      <textarea
+                        aria-label="최종 가사 편집"
+                        rows={Math.min(
+                          12,
+                          Math.max(4, lyricDraftEditorText.split('\n').length),
+                        )}
+                        value={lyricDraftEditorText}
+                        onChange={(event) =>
+                          setLyricDraftEditorState({
+                            sourceText: lyricDraftDocumentText,
+                            editorText: event.target.value,
+                          })
+                        }
+                      />
+                      <div className="lyric-draft-actions">
+                        <button type="button" onClick={saveLyricDraftEdit}>
+                          최종 가사 저장
+                        </button>
+                        <span>
+                          {splitEditedLyricLines(lyricDraftEditorText).length}줄
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="empty-state">
+                      확정된 lyric draft가 없습니다. 추출 결과를 확인한 뒤
+                      저장하세요.
+                    </p>
+                  )}
+                </section>
+              ) : null}
 
-              <div className="lane-editor-layout">
-                <div className="lane-control-panel">
-                  <h3>Lane</h3>
+              {editorWizardStep === 'lanes' ? (
+                <section
+                  className="workspace-section lane-assignment-section"
+                  aria-labelledby="lane-assignment-title"
+                >
+                  <div className="section-heading">
+                    <h2 id="lane-assignment-title">Lane 설정</h2>
+                    <span>
+                      lane {project.lyricLanes.length}개 / main cue{' '}
+                      {project.cues.length}개
+                    </span>
+                  </div>
+
+                  <div className="assignment-workbench">
+                    <div className="lyrics-assignment-document">
+                      <div className="panel-title-row">
+                        <h3>전체 가사</h3>
+                        <span>{selectedLane?.name ?? 'Lane'} 선택 중</span>
+                      </div>
+
+                      <div className="lyrics-line-list" aria-label="전체 가사">
+                        {lyricDraft.length > 0 ? (
+                          <>
+                            <div className="lyric-document-editor">
+                              <div
+                                className="lyric-draft-document"
+                                aria-label="lyric draft document"
+                                onMouseUp={assignLyricDocumentSelectionToLane}
+                              >
+                                {lyricDocumentFragments.map((fragment) =>
+                                  fragment.highlights.length > 0 ? (
+                                    <mark
+                                      className={
+                                        fragment.highlights.some(
+                                          (highlight) =>
+                                            highlight.laneId === selectedLaneId,
+                                        )
+                                          ? 'lyric-highlight-mark lyric-highlight-mark-selected-lane'
+                                          : 'lyric-highlight-mark'
+                                      }
+                                      key={fragment.id}
+                                      style={createLyricHighlightStyle(
+                                        fragment.highlights,
+                                        selectedLaneId,
+                                      )}
+                                      title={formatLyricHighlightTitle(
+                                        fragment.highlights,
+                                      )}
+                                    >
+                                      {fragment.text}
+                                    </mark>
+                                  ) : (
+                                    <span key={fragment.id}>
+                                      {fragment.text}
+                                    </span>
+                                  ),
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="empty-state">
+                            확정된 lyric draft가 없습니다. Lyrics 단계에서
+                            가사를 먼저 저장하세요.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
+              {editorWizardStep === 'lanes' ? (
+                <aside
+                  className="workspace-sidebar assignment-legend"
+                  aria-label="Lane 범례"
+                >
+                  <div className="panel-title-row">
+                    <h3>Lane 범례</h3>
+                    <span>Main만 매칭</span>
+                  </div>
+
                   <div className="lane-add-row">
                     <input
                       aria-label="새 lane 이름"
@@ -1803,15 +2629,13 @@ export function HomePage() {
                       onChange={(event) => setNewLaneName(event.target.value)}
                     />
                     <select
-                      aria-label="새 lane 기본 role"
-                      value={newLaneRole}
-                      onChange={(event) =>
-                        setNewLaneRole(event.target.value as LyricRole)
-                      }
+                      aria-label="새 lane part"
+                      value={newLanePartId}
+                      onChange={(event) => setNewLanePartId(event.target.value)}
                     >
-                      {LANE_ROLE_OPTIONS.map((option) => (
-                        <option value={option.value} key={option.value}>
-                          {option.label}
+                      {project.parts.map((part) => (
+                        <option value={part.id} key={part.id}>
+                          {part.name}
                         </option>
                       ))}
                     </select>
@@ -1820,183 +2644,199 @@ export function HomePage() {
                     </button>
                   </div>
 
-                  <div className="lane-pill-list" aria-label="lyric lane 목록">
+                  <div
+                    className="assignment-legend-list"
+                    aria-label="lyric lane 목록"
+                  >
                     {sortedLanes.map((lane) => (
-                      <button
+                      <article
                         className={
                           lane.id === selectedLane?.id
-                            ? 'lane-pill lane-pill-active'
-                            : 'lane-pill'
+                            ? 'assignment-legend-row assignment-legend-row-active'
+                            : 'assignment-legend-row'
                         }
-                        type="button"
-                        aria-pressed={lane.id === selectedLane?.id}
                         key={lane.id}
-                        onClick={() => setSelectedLaneId(lane.id)}
                       >
-                        <span>{lane.name}</span>
-                        <small>
-                          {lane.defaultRole} ·{' '}
-                          {getLaneCueSequence(project, lane.id).length} cue
-                        </small>
-                      </button>
+                        <button
+                          className="assignment-legend-button"
+                          type="button"
+                          aria-pressed={lane.id === selectedLane?.id}
+                          onClick={() => {
+                            setSelectedLaneId(lane.id)
+                            if (lane.partId) {
+                              setSelectedPartId(lane.partId)
+                            }
+                          }}
+                        >
+                          <span
+                            className="legend-swatch"
+                            style={{
+                              backgroundColor: getPartColor(
+                                lane.partId ?? '',
+                                project.parts,
+                              ),
+                            }}
+                          />
+                          <span>
+                            <strong>{lane.name}</strong>
+                            <small>
+                              {formatLanePartMatch(
+                                lane,
+                                project.parts,
+                                project.media,
+                              )}{' '}
+                              · {getLaneCueSequence(project, lane.id).length}{' '}
+                              cue
+                            </small>
+                          </span>
+                        </button>
+                        <label>
+                          Part
+                          <select
+                            aria-label={`${lane.name} lane part`}
+                            value={lane.partId ?? ''}
+                            onChange={(event) =>
+                              updateLyricLanePart(lane.id, event.target.value)
+                            }
+                          >
+                            {project.parts.map((part) => (
+                              <option value={part.id} key={part.id}>
+                                {part.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </article>
                     ))}
                   </div>
-                </div>
 
-                <div className="draft-queue-panel">
-                  <div className="panel-title-row">
-                    <h3>Lyric draft queue</h3>
+                  <div className="assignment-history-actions">
                     <button
                       type="button"
-                      onClick={placeAllDraftLines}
-                      disabled={!selectedLane || lyricDraft.length === 0}
+                      onClick={undoLaneEditorChange}
+                      disabled={laneEditorHistory.past.length === 0}
                     >
-                      전체 배치
+                      실행 취소
+                    </button>
+                    <button
+                      type="button"
+                      onClick={redoLaneEditorChange}
+                      disabled={laneEditorHistory.future.length === 0}
+                    >
+                      다시 실행
                     </button>
                   </div>
-                  <div className="draft-line-list">
-                    {lyricDraft.map((line) => (
-                      <div className="draft-line-item" key={line.id}>
-                        <p>{line.text}</p>
-                        <button
-                          type="button"
-                          aria-label={`${selectedLane?.name ?? '선택 lane'}에 배치: ${
-                            line.text
-                          }`}
-                          onClick={() => placeDraftLine(line.id)}
-                          disabled={!selectedLane}
-                        >
-                          배치
-                        </button>
-                      </div>
-                    ))}
-                    {lyricDraft.length === 0 ? (
-                      <p className="empty-state">
-                        대기 중인 lyric draft가 없습니다.
-                      </p>
-                    ) : null}
+                </aside>
+              ) : null}
+
+              {editorWizardStep === 'harmony' ? (
+                <section
+                  className="workspace-section harmony-assignment-section"
+                  aria-labelledby="harmony-assignment-title"
+                >
+                  <div className="section-heading">
+                    <h2 id="harmony-assignment-title">Sub</h2>
+                    <span>
+                      cue {project.cues.length}개 / mark{' '}
+                      {project.partMarks.length}개
+                    </span>
                   </div>
-                </div>
-              </div>
 
-              <div className="tap-sync-panel">
-                <div className="panel-title-row">
-                  <h3>{selectedLane?.name ?? 'Lane'} cues</h3>
-                  <span>{selectedCue ? formatCueRange(selectedCue) : '-'}</span>
-                </div>
+                  <div className="assignment-workbench">
+                    <div className="harmony-cue-document">
+                      <div className="panel-title-row">
+                        <h3>전체 가사</h3>
+                        <span>{selectedPart?.name ?? 'Part'} 선택 중</span>
+                      </div>
 
-                <div className="tap-sync-actions" aria-label="tap sync actions">
-                  <button
-                    type="button"
-                    onClick={() => selectAdjacentCue('previous')}
-                    disabled={
-                      !selectedCue || !getPreviousCueId(project, selectedCue.id)
-                    }
-                  >
-                    이전 cue
-                  </button>
-                  <button
-                    type="button"
-                    onClick={tapSelectedCueStart}
-                    disabled={!selectedCue}
-                    aria-keyshortcuts="Space"
-                    title="Space"
-                  >
-                    현재 시간 시작
-                  </button>
-                  <button
-                    type="button"
-                    onClick={tapSelectedCueEnd}
-                    disabled={!selectedCue}
-                    aria-keyshortcuts="G"
-                    title="G"
-                  >
-                    현재 cue 종료
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => selectAdjacentCue('next')}
-                    disabled={
-                      !selectedCue || !getNextCueId(project, selectedCue.id)
-                    }
-                  >
-                    다음 cue
-                  </button>
-                  <button
-                    type="button"
-                    onClick={undoLaneEditorChange}
-                    disabled={laneEditorHistory.past.length === 0}
-                    aria-keyshortcuts="Backspace"
-                    title="Backspace"
-                  >
-                    실행 취소
-                  </button>
-                  <button
-                    type="button"
-                    onClick={redoLaneEditorChange}
-                    disabled={laneEditorHistory.future.length === 0}
-                  >
-                    다시 실행
-                  </button>
-                </div>
-
-                <ol className="cue-list">
-                  {selectedLaneCues.map((cue, index) => (
-                    <li
-                      className={
-                        cue.id === selectedCue?.id
-                          ? 'cue-list-item cue-list-item-active'
-                          : 'cue-list-item'
-                      }
-                      key={cue.id}
-                    >
-                      <button
-                        className="cue-select-button"
-                        type="button"
-                        onClick={() => setSelectedCueId(cue.id)}
+                      <div
+                        className="lyrics-line-list"
+                        aria-label="Sub 전체 가사"
                       >
-                        <span>#{index + 1}</span>
-                        <strong>{getCueText(cue)}</strong>
-                        <small>{formatCueRange(cue)}</small>
-                        <small>{formatCueState(cue)}</small>
+                        {timelineCues.length > 0 ? (
+                          <div className="lyric-document-editor">
+                            <div
+                              className="lyric-draft-document"
+                              aria-label="sub lyric document"
+                              onMouseUp={toggleSelectedPartMarkFromDocument}
+                            >
+                              {harmonyDocumentFragments.map((fragment) => {
+                                if (fragment.partMarkHighlights.length > 0) {
+                                  return (
+                                    <mark
+                                      className="sub-highlight-mark"
+                                      key={fragment.id}
+                                      style={createPartMarkDocumentStyle(
+                                        fragment.partMarkHighlights,
+                                        project.parts,
+                                      )}
+                                      title={formatPartMarkDocumentTitle(
+                                        fragment.partMarkHighlights,
+                                        project.parts,
+                                      )}
+                                    >
+                                      {fragment.text}
+                                    </mark>
+                                  )
+                                }
+
+                                return (
+                                  <span key={fragment.id}>{fragment.text}</span>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                        {timelineCues.length === 0 ? (
+                          <p className="empty-state">
+                            Lane 단계에서 Main cue를 먼저 만드세요.
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
+              {editorWizardStep === 'harmony' ? (
+                <aside
+                  className="workspace-sidebar assignment-legend"
+                  aria-label="Sub 범례"
+                >
+                  <div className="panel-title-row">
+                    <h3>Sub 범례</h3>
+                    <span>화음 표시 대상</span>
+                  </div>
+
+                  <div className="assignment-legend-list">
+                    {project.parts.map((part) => (
+                      <button
+                        className={
+                          part.id === selectedPart?.id
+                            ? 'assignment-legend-button assignment-legend-button-active'
+                            : 'assignment-legend-button'
+                        }
+                        type="button"
+                        aria-pressed={part.id === selectedPart?.id}
+                        key={part.id}
+                        onClick={() => setSelectedPartId(part.id)}
+                      >
+                        <span
+                          className="legend-swatch"
+                          style={{ backgroundColor: part.color }}
+                        />
+                        <span>
+                          <strong>{part.name}</strong>
+                          <small>
+                            {formatPartAudioVariant(part, project.media)}
+                          </small>
+                        </span>
                       </button>
-                    </li>
-                  ))}
-                </ol>
-                {selectedLaneCues.length === 0 ? (
-                  <p className="empty-state">
-                    선택한 lane에 배치된 cue가 없습니다.
-                  </p>
-                ) : null}
-              </div>
+                    ))}
+                  </div>
 
-              <div className="part-mark-editor-panel">
-                <div className="panel-title-row">
-                  <h3>Part Mark Editor</h3>
-                  <span>
-                    segment {selectedCueSegmentCount}개 / mark{' '}
-                    {project.partMarks.length}개
-                  </span>
-                </div>
-
-                <div className="part-mark-control-row">
-                  <label>
-                    Mark 대상 Part
-                    <select
-                      value={selectedPart?.id ?? ''}
-                      onChange={(event) =>
-                        setSelectedPartId(event.target.value)
-                      }
-                    >
-                      {project.parts.map((part) => (
-                        <option value={part.id} key={part.id}>
-                          {part.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    기본 mark
+                  <label className="legend-mark-style">
+                    기본 Sub 표시
                     <select
                       value={selectedPart?.defaultMarkStyle ?? 'highlight'}
                       disabled={!selectedPart}
@@ -2016,163 +2856,528 @@ export function HomePage() {
                       ))}
                     </select>
                   </label>
-                </div>
 
-                {selectedCue ? (
-                  <div className="segment-editor-list">
-                    {selectedCue.segments.map((segment) => {
-                      const segmentMarks = getPartMarksForSegment(
-                        project.partMarks,
-                        selectedCue.id,
-                        segment.id,
-                      )
+                  <label className="legend-mark-style">
+                    Level
+                    <select
+                      aria-label="선택된 Sub level"
+                      value={String(
+                        selectedPart?.harmonyLevel ?? MIN_HARMONY_LEVEL,
+                      )}
+                      disabled={!selectedPart}
+                      onChange={(event) =>
+                        selectedPart
+                          ? updatePart(selectedPart.id, {
+                              harmonyLevel: normalizeHarmonyLevelInput(
+                                Number(event.target.value),
+                              ),
+                            })
+                          : undefined
+                      }
+                    >
+                      {HARMONY_LEVEL_OPTIONS.map((level) => (
+                        <option value={level} key={level}>
+                          {level}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="assignment-history-actions">
+                    <button
+                      type="button"
+                      onClick={undoLaneEditorChange}
+                      disabled={laneEditorHistory.past.length === 0}
+                    >
+                      실행 취소
+                    </button>
+                    <button
+                      type="button"
+                      onClick={redoLaneEditorChange}
+                      disabled={laneEditorHistory.future.length === 0}
+                    >
+                      다시 실행
+                    </button>
+                  </div>
+                </aside>
+              ) : null}
+
+              {editorWizardStep === 'sync' ? (
+                <section
+                  className="workspace-section sync-section"
+                  aria-labelledby="sync-title"
+                >
+                  <div className="section-heading">
+                    <h2 id="sync-title">Sync</h2>
+                    <span>
+                      cue {project.cues.length}개 / position{' '}
+                      {formatDuration(audioPositionMs)}
+                    </span>
+                  </div>
+
+                  <div className="assignment-workbench">
+                    <div className="tap-sync-panel">
+                      <div className="panel-title-row">
+                        <h3>Cue list</h3>
+                        <span>
+                          {selectedCue ? getCueText(selectedCue) : 'cue 없음'}
+                        </span>
+                      </div>
+
+                      <ul className="cue-list" aria-label="sync cue 목록">
+                        {syncCues.map((cue, index) => (
+                          <li
+                            className={
+                              cue.id === selectedCue?.id
+                                ? 'cue-list-item cue-list-item-active'
+                                : 'cue-list-item'
+                            }
+                            key={cue.id}
+                          >
+                            <button
+                              className="cue-select-button"
+                              type="button"
+                              onClick={() => {
+                                setSelectedLaneId(cue.laneId)
+                                setSelectedCueId(cue.id)
+                              }}
+                            >
+                              <span>{index + 1}</span>
+                              <strong>{getCueText(cue)}</strong>
+                              <small>{formatSyncCueRange(cue)}</small>
+                              <small>{getLaneName(cue.laneId, project)}</small>
+                            </button>
+                          </li>
+                        ))}
+                        {syncCues.length === 0 ? (
+                          <li className="cue-list-item">
+                            <p className="empty-state">
+                              Lane 단계에서 Main cue를 먼저 만드세요.
+                            </p>
+                          </li>
+                        ) : null}
+                      </ul>
+                    </div>
+
+                    <aside className="tap-sync-panel" aria-label="Sync 컨트롤">
+                      <div className="panel-title-row">
+                        <h3>Tap Sync</h3>
+                        <span>{formatDuration(audioPositionMs)}</span>
+                      </div>
+
+                      <div className="tap-sync-actions">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            isAudioPlaying ? pauseAudio() : void playAudio()
+                          }
+                          disabled={isAudioPreparing || !canPlayProjectAudio}
+                        >
+                          {isAudioPlaying ? '일시정지' : '재생'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void seekAudio(audioPositionMs - 2000)}
+                          disabled={audioDurationMs === 0}
+                        >
+                          -2s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void seekAudio(audioPositionMs + 2000)}
+                          disabled={audioDurationMs === 0}
+                        >
+                          +2s
+                        </button>
+                        <button
+                          type="button"
+                          onClick={tapSelectedCueStart}
+                          disabled={!selectedCue}
+                        >
+                          Start 입력
+                        </button>
+                        <button
+                          type="button"
+                          onClick={tapSelectedCueEnd}
+                          disabled={!selectedCue}
+                        >
+                          End 입력
+                        </button>
+                        <button
+                          type="button"
+                          onClick={undoLaneEditorChange}
+                          disabled={laneEditorHistory.past.length === 0}
+                        >
+                          실행 취소
+                        </button>
+                      </div>
+
+                      <label className="seek-control">
+                        Seek
+                        <input
+                          type="range"
+                          min="0"
+                          max={Math.max(audioDurationMs, 1)}
+                          step="100"
+                          value={clampPosition(
+                            audioPositionMs,
+                            audioDurationMs,
+                          )}
+                          disabled={audioDurationMs === 0}
+                          onChange={(event) =>
+                            void seekAudio(Number(event.target.value))
+                          }
+                        />
+                      </label>
+                      <div className="transport-time">
+                        <span>{formatDuration(audioPositionMs)}</span>
+                        <span>{formatDuration(audioDurationMs)}</span>
+                      </div>
+                    </aside>
+                  </div>
+                </section>
+              ) : null}
+            </>
+          ) : null}
+
+          {!isEditorMode || editorWizardStep === 'preview' ? (
+            <section
+              className="workspace-section viewer-mode-section"
+              aria-labelledby="viewer-mode-title"
+              onKeyDown={handleViewerKeyDown}
+              onWheel={handleViewerManualScroll}
+              onTouchMove={handleViewerManualScroll}
+            >
+              <div className="section-heading">
+                <h2 id="viewer-mode-title">Viewer Mode</h2>
+                <span>
+                  {timelineCues.length} cue / auto-scroll{' '}
+                  {isAutoScrollPaused ? 'paused' : 'on'}
+                </span>
+              </div>
+
+              <div className="viewer-mode-layout">
+                <div className="viewer-main">
+                  <div
+                    ref={viewerStageRef}
+                    className="viewer-lyrics-stage"
+                    aria-label="viewer lyrics document"
+                    tabIndex={0}
+                  >
+                    {timelineCues.map((cue) => {
+                      const isViewerCuePartFocused = isCueFocusedByViewerPart({
+                        cue,
+                        focusMode: viewerPartFocusMode,
+                        focusedLaneIds: viewerFocusedLaneIds,
+                        focusedPartId: effectiveViewerFocusedPartId,
+                        partMarks: project.partMarks,
+                      })
 
                       return (
-                        <div className="segment-editor-row" key={segment.id}>
-                          <label>
-                            Role
-                            <select
-                              aria-label={`${segment.text} segment role`}
-                              value={segment.role}
-                              onChange={(event) =>
-                                updateSelectedCueSegmentRole(
-                                  segment.id,
-                                  event.target.value as LyricRole,
-                                )
-                              }
-                            >
-                              {LANE_ROLE_OPTIONS.map((option) => (
-                                <option value={option.value} key={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <span
-                            className={`segment-select-text segment-select-text-${segment.role}`}
-                            onMouseUp={(event) =>
-                              toggleSelectedPartMark(
-                                event,
-                                selectedCue.id,
-                                segment.id,
-                              )
-                            }
-                          >
-                            {segment.text}
+                        <button
+                          ref={(element) => {
+                            viewerCueRefs.current[cue.id] = element
+                          }}
+                          className={createViewerCueClassName({
+                            isActive: activeCueIds.has(cue.id),
+                            isPartFocusEnabled: viewerPartFocusMode !== 'all',
+                            isPartFocused: isViewerCuePartFocused,
+                          })}
+                          type="button"
+                          key={cue.id}
+                          onClick={() => void playViewerCue(cue)}
+                        >
+                          <span className="viewer-cue-range">
+                            {formatCueRange(cue)}
                           </span>
-                          <div className="part-mark-chip-list">
-                            {segmentMarks.map((mark) => (
-                              <span
-                                className="part-mark-chip"
-                                key={mark.id}
-                                style={createPartSwatchStyle(
-                                  mark,
-                                  project.parts,
-                                )}
-                              >
-                                {formatPartMarkLabel(mark, project.parts)}
-                              </span>
-                            ))}
-                            {segmentMarks.length === 0 ? (
-                              <span className="part-mark-chip-empty">
-                                Part Mark 없음
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
+                          <ViewerCueText
+                            cue={cue}
+                            focusMode={viewerPartFocusMode}
+                            focusedPartId={effectiveViewerFocusedPartId}
+                            isCuePartFocused={isViewerCuePartFocused}
+                            parts={project.parts}
+                            partMarks={project.partMarks}
+                          />
+                        </button>
                       )
                     })}
+                    {timelineCues.length === 0 ? (
+                      <p className="empty-state">표시할 cue가 없습니다.</p>
+                    ) : null}
                   </div>
-                ) : (
-                  <p className="empty-state">편집할 cue가 없습니다.</p>
-                )}
+
+                  {isAutoScrollPaused ? (
+                    <button
+                      className="viewer-resume-scroll"
+                      type="button"
+                      onClick={resumeViewerAutoScroll}
+                    >
+                      현재 위치로
+                    </button>
+                  ) : null}
+                </div>
+
+                <aside
+                  className="viewer-side-panel"
+                  aria-label="viewer side panel"
+                >
+                  <div className="viewer-panel-tabs">
+                    <button
+                      type="button"
+                      aria-pressed={viewerPanel === 'parts'}
+                      onClick={() => setViewerPanel('parts')}
+                    >
+                      Parts
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={viewerPanel === 'mixer'}
+                      onClick={() => setViewerPanel('mixer')}
+                    >
+                      Mixer
+                    </button>
+                  </div>
+
+                  {viewerPanel === 'parts' ? (
+                    <div className="viewer-parts-panel">
+                      {project.parts.map((part) => {
+                        const partTracks = project.media.filter(
+                          (track) =>
+                            track.role === 'part-audio' &&
+                            track.partId === part.id,
+                        )
+
+                        return (
+                          <article
+                            className={
+                              effectiveViewerFocusedPartId === part.id
+                                ? 'viewer-part-item viewer-part-item-selected'
+                                : 'viewer-part-item'
+                            }
+                            key={part.id}
+                          >
+                            <button
+                              className="viewer-part-select-button"
+                              type="button"
+                              aria-pressed={
+                                effectiveViewerFocusedPartId === part.id
+                              }
+                              onClick={() => toggleViewerPartFocus(part)}
+                            >
+                              <span className="viewer-part-heading">
+                                <span
+                                  className="viewer-part-color"
+                                  style={{ backgroundColor: part.color }}
+                                />
+                                <strong>{part.name}</strong>
+                              </span>
+                            </button>
+                            <p>{part.description || '파트 설명 없음'}</p>
+                            <dl>
+                              <div>
+                                <dt>Mark</dt>
+                                <dd>{part.defaultMarkStyle}</dd>
+                              </div>
+                              <div>
+                                <dt>Guide</dt>
+                                <dd>{part.guidePosition}</dd>
+                              </div>
+                              <div>
+                                <dt>Level</dt>
+                                <dd>{part.harmonyLevel}</dd>
+                              </div>
+                              <div>
+                                <dt>Variant</dt>
+                                <dd>
+                                  {partTracks.length > 0
+                                    ? partTracks
+                                        .map(
+                                          (track) => track.variant ?? 'custom',
+                                        )
+                                        .join(', ')
+                                    : '연결 없음'}
+                                </dd>
+                              </div>
+                            </dl>
+                          </article>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div className="viewer-mixer-panel">
+                      <div className="viewer-track-list">
+                        {project.media.map((track) => (
+                          <div className="viewer-track-row" key={track.id}>
+                            <div>
+                              <strong>{track.title}</strong>
+                              <span>
+                                {formatTrackRole(track, project.parts)}
+                              </span>
+                            </div>
+                            <label>
+                              Volume
+                              <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                value={track.volume}
+                                onChange={(event) =>
+                                  updateMediaTrackMix(track.id, {
+                                    volume: Number(event.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="inline-check">
+                              <input
+                                type="checkbox"
+                                checked={track.muted}
+                                onChange={(event) =>
+                                  updateMediaTrackMix(track.id, {
+                                    muted: event.target.checked,
+                                  })
+                                }
+                              />
+                              Mute
+                            </label>
+                            <label className="inline-check">
+                              <input
+                                type="checkbox"
+                                checked={track.solo}
+                                onChange={(event) =>
+                                  updateMediaTrackMix(track.id, {
+                                    solo: event.target.checked,
+                                  })
+                                }
+                              />
+                              Solo
+                            </label>
+                          </div>
+                        ))}
+                        {project.media.length === 0 ? (
+                          <p className="empty-state">
+                            음원을 추가하면 Viewer Mixer를 사용할 수 있습니다.
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+                </aside>
+              </div>
+
+              <div className="viewer-playbar" aria-label="viewer playbar">
+                <button
+                  className="viewer-play-toggle"
+                  type="button"
+                  onClick={() =>
+                    isAudioPlaying ? pauseAudio() : void playAudio()
+                  }
+                  disabled={isAudioPreparing || !canPlayProjectAudio}
+                >
+                  {isAudioPlaying ? 'Pause' : 'Play'}
+                </button>
+                <div
+                  className="viewer-seek-control"
+                  aria-label="viewer progress"
+                >
+                  <span>{formatDuration(audioPositionMs)}</span>
+                  <input
+                    aria-label="재생 위치"
+                    type="range"
+                    min="0"
+                    max={Math.max(audioDurationMs, 1)}
+                    step="100"
+                    value={clampPosition(audioPositionMs, audioDurationMs)}
+                    disabled={audioDurationMs === 0}
+                    onChange={(event) =>
+                      void seekAudio(Number(event.target.value))
+                    }
+                  />
+                  <span>{formatDuration(audioDurationMs)}</span>
+                </div>
+                <button
+                  className="viewer-loop-boundary-start"
+                  type="button"
+                  onClick={() => markAbLoopBoundary('start')}
+                >
+                  A {formatDuration(abLoopStartMs ?? 0)}
+                </button>
+                <button
+                  className="viewer-loop-boundary-end"
+                  type="button"
+                  onClick={() => markAbLoopBoundary('end')}
+                >
+                  B {formatDuration(abLoopEndMs ?? 0)}
+                </button>
+                <button
+                  className="viewer-ab-loop-control"
+                  type="button"
+                  aria-pressed={viewerLoopMode === 'ab'}
+                  disabled={!abLoopReady}
+                  onClick={toggleAbLoop}
+                >
+                  A-B Loop
+                </button>
+                <button
+                  className="viewer-cue-loop-control"
+                  type="button"
+                  aria-pressed={viewerLoopMode === 'cue'}
+                  disabled={!selectedTimelineCue && !activeTimelineCue}
+                  onClick={toggleCueLoop}
+                >
+                  Cue Loop
+                </button>
+                <label className="viewer-rate-control">
+                  Rate
+                  <select
+                    value={playbackRate}
+                    onChange={(event) =>
+                      setPlaybackRate(Number(event.target.value))
+                    }
+                  >
+                    {PLAYBACK_RATE_OPTIONS.map((rate) => (
+                      <option value={rate} key={rate}>
+                        {rate}x
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="viewer-loop-state">
+                  {viewerLoopMode === 'ab'
+                    ? `A-B ${formatLoopRange(abLoopStartMs, abLoopEndMs)}`
+                    : viewerLoopMode === 'cue' && viewerLoopCue
+                      ? `Cue ${getCueText(viewerLoopCue)}`
+                      : 'Loop off'}
+                </div>
               </div>
             </section>
-          </>
-        ) : null}
+          ) : null}
 
-        <section
-          className="workspace-section viewer-mode-section"
-          aria-labelledby="viewer-mode-title"
-          onKeyDown={handleViewerKeyDown}
-        >
-          <div className="section-heading">
-            <h2 id="viewer-mode-title">Viewer Mode</h2>
-            <span>
-              {timelineCues.length} cue / auto-scroll{' '}
-              {isAutoScrollPaused ? 'paused' : 'on'}
-            </span>
-          </div>
-
-          <div className="viewer-mode-layout">
-            <div className="viewer-main">
-              <div
-                ref={viewerStageRef}
-                className="viewer-lyrics-stage"
-                aria-label="viewer lyrics document"
-                tabIndex={0}
-                onScroll={handleViewerScroll}
+          {isEditorMode && editorWizardStep === 'audio' ? (
+            <>
+              <section
+                className="workspace-section"
+                aria-labelledby="parts-title"
               >
-                {timelineCues.map((cue) => (
-                  <button
-                    ref={(element) => {
-                      viewerCueRefs.current[cue.id] = element
-                    }}
-                    className={
-                      activeCueIds.has(cue.id)
-                        ? 'viewer-cue viewer-cue-active'
-                        : 'viewer-cue'
-                    }
-                    type="button"
-                    key={cue.id}
-                    onClick={() => void playViewerCue(cue)}
-                  >
-                    <span className="viewer-cue-range">
-                      {formatCueRange(cue)}
-                    </span>
-                    <ViewerCueText
-                      cue={cue}
-                      parts={project.parts}
-                      partMarks={project.partMarks}
-                    />
+                <div className="section-heading">
+                  <h2 id="parts-title">Parts from Audio</h2>
+                  <span>{mrTrack ? 'MR 포함됨' : 'MR 필요'}</span>
+                </div>
+
+                <div className="part-add-row">
+                  <input
+                    aria-label="새 part 이름"
+                    placeholder="새 part 이름"
+                    value={newPartName}
+                    onChange={(event) => setNewPartName(event.target.value)}
+                  />
+                  <button type="button" onClick={addPart}>
+                    Part 추가
                   </button>
-                ))}
-                {timelineCues.length === 0 ? (
-                  <p className="empty-state">표시할 cue가 없습니다.</p>
-                ) : null}
-              </div>
+                </div>
 
-              {isAutoScrollPaused ? (
-                <button
-                  className="viewer-resume-scroll"
-                  type="button"
-                  onClick={resumeViewerAutoScroll}
-                >
-                  현재 위치로
-                </button>
-              ) : null}
-            </div>
-
-            <aside className="viewer-side-panel" aria-label="viewer side panel">
-              <div className="viewer-panel-tabs">
-                <button
-                  type="button"
-                  aria-pressed={viewerPanel === 'parts'}
-                  onClick={() => setViewerPanel('parts')}
-                >
-                  Parts
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={viewerPanel === 'mixer'}
-                  onClick={() => setViewerPanel('mixer')}
-                >
-                  Mixer
-                </button>
-              </div>
-
-              {viewerPanel === 'parts' ? (
-                <div className="viewer-parts-panel">
+                <div className="part-list">
                   {project.parts.map((part) => {
                     const partTracks = project.media.filter(
                       (track) =>
@@ -2180,375 +3385,207 @@ export function HomePage() {
                     )
 
                     return (
-                      <article className="viewer-part-item" key={part.id}>
-                        <div className="viewer-part-heading">
-                          <span
-                            className="viewer-part-color"
-                            style={{ backgroundColor: part.color }}
+                      <div className="part-item" key={part.id}>
+                        <div className="part-summary-row">
+                          <input
+                            aria-label={`${part.name} 색상`}
+                            className="part-color"
+                            type="color"
+                            value={part.color}
+                            onChange={(event) =>
+                              updatePart(part.id, { color: event.target.value })
+                            }
                           />
-                          <strong>{part.name}</strong>
+                          <label>
+                            Part 이름
+                            <input
+                              value={part.name}
+                              onChange={(event) =>
+                                updatePart(part.id, {
+                                  name: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                          <label>
+                            Audio variant 연결
+                            <select
+                              value={part.defaultTrackId ?? ''}
+                              onChange={(event) =>
+                                updatePartAudioVariant(
+                                  part.id,
+                                  event.target.value || null,
+                                )
+                              }
+                            >
+                              <option value="">연결 없음</option>
+                              {partTracks.map((track) => (
+                                <option value={track.id} key={track.id}>
+                                  {track.title} / {track.variant ?? 'custom'}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
-                        <p>{part.description || '파트 설명 없음'}</p>
-                        <dl>
-                          <div>
-                            <dt>Mark</dt>
-                            <dd>{part.defaultMarkStyle}</dd>
-                          </div>
-                          <div>
-                            <dt>Guide</dt>
-                            <dd>{part.guidePosition}</dd>
-                          </div>
-                          <div>
-                            <dt>Variant</dt>
-                            <dd>
-                              {partTracks.length > 0
-                                ? partTracks
-                                    .map((track) => track.variant ?? 'custom')
-                                    .join(', ')
-                                : '연결 없음'}
-                            </dd>
-                          </div>
-                        </dl>
-                      </article>
+
+                        <label>
+                          설명
+                          <textarea
+                            rows={2}
+                            value={part.description ?? ''}
+                            onChange={(event) =>
+                              updatePart(part.id, {
+                                description:
+                                  event.target.value.trim() || undefined,
+                              })
+                            }
+                          />
+                        </label>
+
+                        <div className="part-config-row">
+                          <label>
+                            Guide 위치
+                            <select
+                              value={part.guidePosition}
+                              onChange={(event) =>
+                                updatePart(part.id, {
+                                  guidePosition: event.target
+                                    .value as Part['guidePosition'],
+                                })
+                              }
+                            >
+                              {GUIDE_POSITION_OPTIONS.map((option) => (
+                                <option value={option.value} key={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Mark style
+                            <select
+                              value={part.defaultMarkStyle}
+                              onChange={(event) =>
+                                updatePart(part.id, {
+                                  defaultMarkStyle: event.target
+                                    .value as Part['defaultMarkStyle'],
+                                })
+                              }
+                            >
+                              {PART_MARK_STYLE_OPTIONS.map((option) => (
+                                <option value={option.value} key={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Level
+                            <select
+                              aria-label={`${part.name} harmony level`}
+                              value={String(part.harmonyLevel)}
+                              onChange={(event) =>
+                                updatePart(part.id, {
+                                  harmonyLevel: normalizeHarmonyLevelInput(
+                                    Number(event.target.value),
+                                  ),
+                                })
+                              }
+                            >
+                              {HARMONY_LEVEL_OPTIONS.map((level) => (
+                                <option value={level} key={level}>
+                                  {level}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <span>
+                            {partTracks.length > 0
+                              ? `${partTracks.length}개 variant`
+                              : '연결된 variant 없음'}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`${part.name} part 제거`}
+                            onClick={() => removePart(part.id)}
+                            title={
+                              partTracks.length > 0
+                                ? '연결된 음원을 먼저 제거하세요.'
+                                : undefined
+                            }
+                          >
+                            Part 제거
+                          </button>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
-              ) : (
-                <div className="viewer-mixer-panel">
-                  {partVariantGroups.length > 0 ? (
-                    <div className="viewer-variant-list">
-                      {partVariantGroups.map(({ part, tracks }) => (
-                        <label key={part.id}>
-                          {part.name}
-                          <select
-                            value={
-                              tracks.find((track) => track.enabled)?.id ??
-                              part.defaultTrackId ??
-                              ''
-                            }
-                            onChange={(event) =>
-                              updatePartAudioVariant(
-                                part.id,
-                                event.target.value,
-                              )
-                            }
-                          >
-                            <option value="">사용 안 함</option>
-                            {tracks.map((track) => (
-                              <option value={track.id} key={track.id}>
-                                {track.title} / {track.variant ?? 'custom'}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
+              </section>
+            </>
+          ) : null}
 
-                  <div className="viewer-track-list">
-                    {project.media.map((track) => (
-                      <div className="viewer-track-row" key={track.id}>
-                        <div>
-                          <strong>{track.title}</strong>
-                          <span>{formatTrackRole(track, project.parts)}</span>
-                        </div>
-                        <label>
-                          Volume
-                          <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.01"
-                            value={track.volume}
-                            onChange={(event) =>
-                              updateMediaTrackMix(track.id, {
-                                volume: Number(event.target.value),
-                              })
-                            }
-                          />
-                        </label>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={track.muted}
-                            onChange={(event) =>
-                              updateMediaTrackMix(track.id, {
-                                muted: event.target.checked,
-                              })
-                            }
-                          />
-                          Mute
-                        </label>
-                        <label className="inline-check">
-                          <input
-                            type="checkbox"
-                            checked={track.solo}
-                            onChange={(event) =>
-                              updateMediaTrackMix(track.id, {
-                                solo: event.target.checked,
-                              })
-                            }
-                          />
-                          Solo
-                        </label>
-                      </div>
-                    ))}
-                    {project.media.length === 0 ? (
-                      <p className="empty-state">
-                        음원을 추가하면 Viewer Mixer를 사용할 수 있습니다.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-            </aside>
-          </div>
-
-          <div className="viewer-playbar" aria-label="viewer playbar">
-            <button
-              type="button"
-              onClick={() => (isAudioPlaying ? pauseAudio() : void playAudio())}
-              disabled={isAudioPreparing || !canPlayProjectAudio}
-            >
-              {isAudioPlaying ? 'Pause' : 'Play'}
-            </button>
-            <div className="viewer-time">
-              <span>{formatDuration(audioPositionMs)}</span>
-              <span>{formatDuration(audioDurationMs)}</span>
-            </div>
-            <label className="viewer-seek-control">
-              Seek
-              <input
-                type="range"
-                min="0"
-                max={Math.max(audioDurationMs, 1)}
-                step="100"
-                value={clampPosition(audioPositionMs, audioDurationMs)}
-                disabled={audioDurationMs === 0}
-                onChange={(event) => void seekAudio(Number(event.target.value))}
-              />
-            </label>
-            <button type="button" onClick={() => markAbLoopBoundary('start')}>
-              A {formatDuration(abLoopStartMs ?? 0)}
-            </button>
-            <button type="button" onClick={() => markAbLoopBoundary('end')}>
-              B {formatDuration(abLoopEndMs ?? 0)}
-            </button>
-            <button
-              type="button"
-              aria-pressed={viewerLoopMode === 'ab'}
-              disabled={!abLoopReady}
-              onClick={toggleAbLoop}
-            >
-              A-B Loop
-            </button>
-            <button
-              type="button"
-              aria-pressed={viewerLoopMode === 'cue'}
-              disabled={!selectedTimelineCue && !activeTimelineCue}
-              onClick={toggleCueLoop}
-            >
-              Cue Loop
-            </button>
-            <label>
-              Rate
-              <select
-                value={playbackRate}
-                onChange={(event) =>
-                  setPlaybackRate(Number(event.target.value))
-                }
+          {isEditorMode && editorWizardStep === 'preview' ? (
+            <>
+              <section
+                className="workspace-section"
+                aria-labelledby="validation-title"
               >
-                {PLAYBACK_RATE_OPTIONS.map((rate) => (
-                  <option value={rate} key={rate}>
-                    {rate}x
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="viewer-loop-state">
-              {viewerLoopMode === 'ab'
-                ? `A-B ${formatLoopRange(abLoopStartMs, abLoopEndMs)}`
-                : viewerLoopMode === 'cue' && viewerLoopCue
-                  ? `Cue ${getCueText(viewerLoopCue)}`
-                  : 'Loop off'}
-            </div>
-          </div>
-        </section>
+                <div className="section-heading">
+                  <h2 id="validation-title">Validation</h2>
+                  <span>project.json + media 참조 검사</span>
+                </div>
 
-        {isEditorMode ? (
-          <>
-            <section
-              className="workspace-section"
-              aria-labelledby="parts-title"
-            >
-              <div className="section-heading">
-                <h2 id="parts-title">Parts</h2>
-                <span>{mrTrack ? 'MR 포함됨' : 'MR 필요'}</span>
-              </div>
-
-              <div className="part-add-row">
-                <input
-                  aria-label="새 part 이름"
-                  placeholder="새 part 이름"
-                  value={newPartName}
-                  onChange={(event) => setNewPartName(event.target.value)}
+                <ValidationList
+                  title="현재 프로젝트"
+                  issues={validationIssues}
+                  emptyMessage="현재 프로젝트는 export 가능합니다."
                 />
-                <button type="button" onClick={addPart}>
-                  Part 추가
-                </button>
-              </div>
-
-              <div className="part-list">
-                {project.parts.map((part) => {
-                  const partTracks = project.media.filter(
-                    (track) =>
-                      track.role === 'part-audio' && track.partId === part.id,
-                  )
-
-                  return (
-                    <div className="part-item" key={part.id}>
-                      <div className="part-summary-row">
-                        <input
-                          aria-label={`${part.name} 색상`}
-                          className="part-color"
-                          type="color"
-                          value={part.color}
-                          onChange={(event) =>
-                            updatePart(part.id, { color: event.target.value })
-                          }
-                        />
-                        <label>
-                          Part 이름
-                          <input
-                            value={part.name}
-                            onChange={(event) =>
-                              updatePart(part.id, { name: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Audio variant 연결
-                          <select
-                            value={part.defaultTrackId ?? ''}
-                            onChange={(event) =>
-                              updatePartAudioVariant(
-                                part.id,
-                                event.target.value || null,
-                              )
-                            }
-                          >
-                            <option value="">연결 없음</option>
-                            {partTracks.map((track) => (
-                              <option value={track.id} key={track.id}>
-                                {track.title} / {track.variant ?? 'custom'}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-
-                      <label>
-                        설명
-                        <textarea
-                          rows={2}
-                          value={part.description ?? ''}
-                          onChange={(event) =>
-                            updatePart(part.id, {
-                              description:
-                                event.target.value.trim() || undefined,
-                            })
-                          }
-                        />
-                      </label>
-
-                      <div className="part-config-row">
-                        <label>
-                          Guide 위치
-                          <select
-                            value={part.guidePosition}
-                            onChange={(event) =>
-                              updatePart(part.id, {
-                                guidePosition: event.target
-                                  .value as Part['guidePosition'],
-                              })
-                            }
-                          >
-                            {GUIDE_POSITION_OPTIONS.map((option) => (
-                              <option value={option.value} key={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Mark style
-                          <select
-                            value={part.defaultMarkStyle}
-                            onChange={(event) =>
-                              updatePart(part.id, {
-                                defaultMarkStyle: event.target
-                                  .value as Part['defaultMarkStyle'],
-                              })
-                            }
-                          >
-                            {PART_MARK_STYLE_OPTIONS.map((option) => (
-                              <option value={option.value} key={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <span>
-                          {partTracks.length > 0
-                            ? `${partTracks.length}개 variant`
-                            : '연결된 variant 없음'}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </section>
-
-            <section
-              className="workspace-section"
-              aria-labelledby="validation-title"
-            >
-              <div className="section-heading">
-                <h2 id="validation-title">Validation</h2>
-                <span>project.json + media 참조 검사</span>
-              </div>
-
-              <ValidationList
-                title="현재 프로젝트"
-                issues={validationIssues}
-                emptyMessage="현재 프로젝트는 export 가능합니다."
-              />
-              <ValidationList
-                title="최근 import"
-                issues={importIssues}
-                emptyMessage="최근 import validation error가 없습니다."
-              />
-              {validationWarnings.length > 0 ? (
-                <p className="validation-note">
-                  warning은 저장을 막지 않지만 프로젝트 파일을 공유하기 전에
-                  확인하세요.
-                </p>
-              ) : null}
-            </section>
-          </>
-        ) : null}
+                <ValidationList
+                  title="최근 import"
+                  issues={importIssues}
+                  emptyMessage="최근 import validation error가 없습니다."
+                />
+                {validationWarnings.length > 0 ? (
+                  <p className="validation-note">
+                    warning은 저장을 막지 않지만 프로젝트 파일을 공유하기 전에
+                    확인하세요.
+                  </p>
+                ) : null}
+              </section>
+            </>
+          ) : null}
+        </div>
       </div>
+      {isProjectFileBusy ? (
+        <div
+          className="project-file-loading-overlay"
+          role="status"
+          aria-label="프로젝트 파일 처리 상태"
+          aria-live="assertive"
+        >
+          <div className="project-file-loading-panel">
+            <span className="project-file-loading-spinner" aria-hidden="true" />
+            <strong>{projectFileBusyMessage}</strong>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }
 
 function ViewerCueText({
   cue,
+  focusMode,
+  focusedPartId,
+  isCuePartFocused,
   parts,
   partMarks,
 }: {
   cue: LyricCue
+  focusMode: ViewerPartFocusMode
+  focusedPartId: string | null
+  isCuePartFocused: boolean
   parts: readonly Part[]
   partMarks: readonly PartMark[]
 }) {
@@ -2560,33 +3597,185 @@ function ViewerCueText({
           cue.id,
           segment.id,
         )
-        const fragments = splitSegmentTextByPartMarks(segment, segmentMarks)
+        const visibleSegmentMarks = focusedPartId
+          ? segmentMarks.filter((mark) => mark.partId === focusedPartId)
+          : segmentMarks
+        const fragments = splitSegmentTextByPartMarks(
+          segment,
+          visibleSegmentMarks,
+        )
 
         return (
           <span
-            className={`viewer-segment viewer-segment-${segment.role}`}
+            className={createViewerSegmentClassName({
+              isPartFocused: focusMode === 'lane' && isCuePartFocused,
+              role: segment.role,
+            })}
             key={segment.id}
           >
             {segmentIndex > 0 ? (
               <span className="viewer-segment-gap"> </span>
             ) : null}
             {fragments.map((fragment) => (
-              <span
-                className={
-                  fragment.marks.length > 0
-                    ? 'part-mark-fragment part-mark-fragment-marked'
-                    : 'part-mark-fragment'
-                }
+              <PartMarkFragment
+                fragment={fragment}
+                focusedPartId={focusedPartId}
                 key={`${segment.id}-${fragment.startChar}-${fragment.endChar}`}
-                style={createPartMarkFragmentStyle(fragment.marks, parts)}
-                title={formatPartMarkTitle(fragment.marks, parts)}
-              >
-                {fragment.text}
-              </span>
+                parts={parts}
+              />
             ))}
           </span>
         )
       })}
+    </span>
+  )
+}
+
+function createViewerCueClassName({
+  isActive,
+  isPartFocusEnabled,
+  isPartFocused,
+}: {
+  isActive: boolean
+  isPartFocusEnabled: boolean
+  isPartFocused: boolean
+}): string {
+  return [
+    'viewer-cue',
+    isActive ? 'viewer-cue-active' : '',
+    isPartFocusEnabled ? 'viewer-cue-part-filtered' : '',
+    isPartFocusEnabled && isPartFocused ? 'viewer-cue-part-focused' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+function createViewerSegmentClassName({
+  isPartFocused,
+  role,
+}: {
+  isPartFocused: boolean
+  role: LyricCue['segments'][number]['role']
+}): string {
+  return [
+    'viewer-segment',
+    `viewer-segment-${role}`,
+    isPartFocused ? 'viewer-segment-part-focused' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+function isCueFocusedByViewerPart({
+  cue,
+  focusMode,
+  focusedLaneIds,
+  focusedPartId,
+  partMarks,
+}: {
+  cue: LyricCue
+  focusMode: ViewerPartFocusMode
+  focusedLaneIds: ReadonlySet<string>
+  focusedPartId: string | null
+  partMarks: readonly PartMark[]
+}): boolean {
+  if (!focusedPartId || focusMode === 'all') {
+    return false
+  }
+
+  if (focusMode === 'lane') {
+    return focusedLaneIds.has(cue.laneId)
+  }
+
+  return partMarks.some(
+    (mark) => mark.cueId === cue.id && mark.partId === focusedPartId,
+  )
+}
+
+function PartMarkFragment({
+  focusedPartId,
+  fragment,
+  parts,
+}: {
+  focusedPartId: string | null
+  fragment: PartMarkTextFragment
+  parts: readonly Part[]
+}) {
+  const isFocusedPartFragment =
+    focusedPartId !== null &&
+    fragment.marks.some((mark) => mark.partId === focusedPartId)
+  const lineAboveMarks = getPartMarksForLineStack(
+    fragment.marks,
+    parts,
+    'line-above',
+  )
+  const lineBelowMarks = getPartMarksForLineStack(
+    fragment.marks,
+    parts,
+    'line-below',
+  )
+
+  return (
+    <span
+      className={[
+        'part-mark-fragment',
+        fragment.marks.length > 0 ? 'part-mark-fragment-marked' : '',
+        isFocusedPartFragment ? 'part-mark-fragment-focused' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={createPartMarkFragmentStyle(
+        fragment.marks,
+        parts,
+        isFocusedPartFragment ? focusedPartId : null,
+      )}
+      title={formatPartMarkTitle(fragment.marks, parts)}
+    >
+      <PartMarkLineStack
+        marks={lineAboveMarks}
+        parts={parts}
+        position="above"
+      />
+      <span className="part-mark-fragment-text">{fragment.text}</span>
+      <PartMarkLineStack
+        marks={lineBelowMarks}
+        parts={parts}
+        position="below"
+      />
+    </span>
+  )
+}
+
+function PartMarkLineStack({
+  marks,
+  parts,
+  position,
+}: {
+  marks: readonly PartMark[]
+  parts: readonly Part[]
+  position: 'above' | 'below'
+}) {
+  if (marks.length === 0) {
+    return null
+  }
+
+  return (
+    <span
+      className={`part-mark-line-stack part-mark-line-stack-${position}`}
+      aria-hidden="true"
+    >
+      {marks.map((mark) => (
+        <span
+          className="part-mark-line"
+          data-harmony-level={
+            parts.find((part) => part.id === mark.partId)?.harmonyLevel ??
+            MIN_HARMONY_LEVEL
+          }
+          data-part-id={mark.partId}
+          key={`${position}-${mark.id}`}
+          style={{ backgroundColor: getPartColor(mark.partId, parts) }}
+        />
+      ))}
     </span>
   )
 }
@@ -2658,6 +3847,565 @@ function getTextSelectionRange(
   }
 }
 
+type LyricDocumentHighlight = LyricCueSourceRange & {
+  id: string
+  laneId: string
+  laneName: string
+  linkId?: string
+  text: string
+  color: string
+}
+
+type LyricDocumentFragment = {
+  id: string
+  text: string
+  highlights: LyricDocumentHighlight[]
+}
+
+type PartMarkDocumentHighlight = LyricCueSourceRange & {
+  id: string
+  cueId: string
+  segmentId: string
+  partId: string
+  style: PartMark['style']
+}
+
+type HarmonyDocumentFragment = {
+  id: string
+  text: string
+  partMarkHighlights: PartMarkDocumentHighlight[]
+}
+
+type PartMarkDocumentTarget = {
+  cueId: string
+  segmentId: string
+  startChar: number
+  endChar: number
+}
+
+type LyricDraftLineRange = LyricCueSourceRange & {
+  lineId: string
+  lineIndex: number
+}
+
+function createLyricDraftLineRanges(
+  draftLines: readonly LyricDraftLine[],
+): LyricDraftLineRange[] {
+  let cursor = 0
+
+  return draftLines.map((line, lineIndex) => {
+    const startChar = cursor
+    const endChar = startChar + line.text.length
+    cursor = endChar + 1
+
+    return {
+      lineId: line.id,
+      lineIndex,
+      startChar,
+      endChar,
+    }
+  })
+}
+
+function createLyricDraftFromEditedText(
+  value: string,
+  currentDraft: readonly LyricDraftLine[],
+): LyricDraftLine[] {
+  return splitEditedLyricLines(value).map((text, index) => ({
+    id: currentDraft[index]?.id ?? `lyric-draft-${index + 1}`,
+    text,
+  }))
+}
+
+function trimTextSelectionRange(
+  documentText: string,
+  range: TextSelectionRange | null,
+): LyricCueSourceRange | null {
+  if (!range) {
+    return null
+  }
+
+  let startChar = Math.max(0, Math.min(range.startChar, documentText.length))
+  let endChar = Math.max(
+    startChar,
+    Math.min(range.endChar, documentText.length),
+  )
+  while (startChar < endChar && /\s/.test(documentText[startChar])) {
+    startChar += 1
+  }
+  while (endChar > startChar && /\s/.test(documentText[endChar - 1])) {
+    endChar -= 1
+  }
+
+  return startChar < endChar ? { startChar, endChar } : null
+}
+
+function splitRangeByLyricDraftLines({
+  documentText,
+  lineRanges,
+  range,
+}: {
+  documentText: string
+  lineRanges: readonly LyricDraftLineRange[]
+  range: LyricCueSourceRange
+}): LyricCueSourceRange[] {
+  return lineRanges
+    .map((lineRange) =>
+      trimTextSelectionRange(documentText, {
+        startChar: Math.max(range.startChar, lineRange.startChar),
+        endChar: Math.min(range.endChar, lineRange.endChar),
+      }),
+    )
+    .filter((lineRange): lineRange is LyricCueSourceRange => Boolean(lineRange))
+}
+
+function createCueLinkId(laneId: string, range: LyricCueSourceRange): string {
+  return `cue-link-${laneId}-${range.startChar}-${range.endChar}`
+}
+
+function createCuesForRanges({
+  documentText,
+  ranges,
+  lane,
+  existingCues,
+  linkId,
+}: {
+  documentText: string
+  ranges: readonly LyricCueSourceRange[]
+  lane: LyricLane
+  existingCues: readonly LyricCue[]
+  linkId?: string
+}): LyricCue[] {
+  const nextCues: LyricCue[] = []
+
+  ranges.forEach((range) => {
+    nextCues.push(
+      createCueFromTextSelection({
+        text: documentText.slice(range.startChar, range.endChar),
+        lane,
+        existingCues: [...existingCues, ...nextCues],
+        linkId,
+        sourceId: `lyric-selection-${range.startChar}-${range.endChar}`,
+        sourceRange: range,
+        role: 'main',
+      }),
+    )
+  })
+
+  return nextCues
+}
+
+function createPartMarkTargetsFromDocumentSelection({
+  documentText,
+  cues,
+  selectionRange,
+}: {
+  documentText: string
+  cues: readonly LyricCue[]
+  selectionRange: LyricCueSourceRange
+}): PartMarkDocumentTarget[] {
+  const fallbackSearchStartByKey = new Map<string, number>()
+
+  return cues.flatMap((cue) => {
+    const cueRange = resolveCueSourceRange(
+      cue,
+      documentText,
+      fallbackSearchStartByKey,
+    )
+    if (!cueRange || !rangesOverlap(cueRange, selectionRange)) {
+      return []
+    }
+
+    return cue.segments.flatMap((segment) => {
+      const segmentRange = resolveSegmentSourceRange(cue, segment.id, cueRange)
+      if (!segmentRange || !rangesOverlap(segmentRange, selectionRange)) {
+        return []
+      }
+
+      const localRange = trimTextSelectionRange(segment.text, {
+        startChar:
+          Math.max(selectionRange.startChar, segmentRange.startChar) -
+          segmentRange.startChar,
+        endChar:
+          Math.min(selectionRange.endChar, segmentRange.endChar) -
+          segmentRange.startChar,
+      })
+      if (!localRange) {
+        return []
+      }
+
+      return {
+        cueId: cue.id,
+        segmentId: segment.id,
+        ...localRange,
+      }
+    })
+  })
+}
+
+function findMatchingLaneHighlights({
+  highlights,
+  laneId,
+  range,
+}: {
+  highlights: readonly LyricDocumentHighlight[]
+  laneId: string
+  range: LyricCueSourceRange
+}): LyricDocumentHighlight[] {
+  return highlights.filter(
+    (highlight) =>
+      highlight.laneId === laneId && rangesOverlap(highlight, range),
+  )
+}
+
+function createCueReplacementsAfterRangeRemoval({
+  cue,
+  lane,
+  documentText,
+  lineRanges,
+  highlight,
+  removalRange,
+  existingCues,
+}: {
+  cue: LyricCue
+  lane: LyricLane
+  documentText: string
+  lineRanges: readonly LyricDraftLineRange[]
+  highlight: LyricDocumentHighlight
+  removalRange: LyricCueSourceRange
+  existingCues: readonly LyricCue[]
+}): LyricCue[] {
+  const removalStart = Math.max(highlight.startChar, removalRange.startChar)
+  const removalEnd = Math.min(highlight.endChar, removalRange.endChar)
+  const remainingRanges = [
+    trimTextSelectionRange(documentText, {
+      startChar: highlight.startChar,
+      endChar: removalStart,
+    }),
+    trimTextSelectionRange(documentText, {
+      startChar: removalEnd,
+      endChar: highlight.endChar,
+    }),
+  ].filter((range): range is LyricCueSourceRange => Boolean(range))
+
+  return remainingRanges.flatMap((remainingRange) =>
+    splitRangeByLyricDraftLines({
+      documentText,
+      lineRanges,
+      range: remainingRange,
+    }).map((range) =>
+      createCueFromTextSelection({
+        text: documentText.slice(range.startChar, range.endChar),
+        lane,
+        existingCues,
+        linkId: cue.linkId,
+        sourceId: `lyric-selection-${range.startChar}-${range.endChar}`,
+        sourceRange: range,
+        role: cue.segments[0]?.role ?? 'main',
+      }),
+    ),
+  )
+}
+
+function createLyricDocumentHighlights({
+  documentText,
+  cues,
+  project,
+}: {
+  documentText: string
+  cues: readonly LyricCue[]
+  project: EazyChorusProject
+}): LyricDocumentHighlight[] {
+  const fallbackSearchStartByKey = new Map<string, number>()
+
+  return cues
+    .map((cue) => {
+      const cueText = getCueText(cue)
+      const sourceRange = resolveCueSourceRange(
+        cue,
+        documentText,
+        fallbackSearchStartByKey,
+      )
+      if (!sourceRange) {
+        return null
+      }
+
+      return {
+        id: cue.id,
+        laneId: cue.laneId,
+        laneName: getLaneName(cue.laneId, project),
+        ...(cue.linkId ? { linkId: cue.linkId } : {}),
+        text: cueText,
+        color: getLaneHighlightColor(cue.laneId, project),
+        ...sourceRange,
+      }
+    })
+    .filter((highlight): highlight is LyricDocumentHighlight =>
+      Boolean(highlight),
+    )
+}
+
+function createPartMarkDocumentHighlights({
+  documentText,
+  cues,
+  partMarks,
+  project,
+}: {
+  documentText: string
+  cues: readonly LyricCue[]
+  partMarks: readonly PartMark[]
+  project: EazyChorusProject
+}): PartMarkDocumentHighlight[] {
+  const fallbackSearchStartByKey = new Map<string, number>()
+
+  return cues.flatMap((cue) => {
+    const cueRange = resolveCueSourceRange(
+      cue,
+      documentText,
+      fallbackSearchStartByKey,
+    )
+    if (!cueRange) {
+      return []
+    }
+
+    return cue.segments.flatMap((segment) => {
+      const segmentRange = resolveSegmentSourceRange(cue, segment.id, cueRange)
+      if (!segmentRange) {
+        return []
+      }
+
+      return partMarks
+        .filter(
+          (mark) =>
+            mark.cueId === cue.id &&
+            mark.segmentId === segment.id &&
+            mark.startChar >= 0 &&
+            mark.endChar > mark.startChar &&
+            mark.endChar <= segment.text.length &&
+            project.parts.some((part) => part.id === mark.partId),
+        )
+        .map((mark) => ({
+          id: mark.id,
+          cueId: mark.cueId,
+          segmentId: mark.segmentId,
+          partId: mark.partId,
+          style: mark.style,
+          startChar: segmentRange.startChar + mark.startChar,
+          endChar: segmentRange.startChar + mark.endChar,
+        }))
+    })
+  })
+}
+
+function resolveCueSourceRange(
+  cue: LyricCue,
+  documentText: string,
+  fallbackSearchStartByKey: Map<string, number>,
+): LyricCueSourceRange | null {
+  if (isValidSourceRange(cue.sourceRange, documentText.length)) {
+    return cue.sourceRange
+  }
+
+  const cueText = getCueText(cue)
+  if (cueText.trim().length === 0) {
+    return null
+  }
+
+  const searchKey = `${cue.laneId}:${cueText}`
+  const searchStart = fallbackSearchStartByKey.get(searchKey) ?? 0
+  let startChar = documentText.indexOf(cueText, searchStart)
+  if (startChar < 0) {
+    startChar = documentText.indexOf(cueText)
+  }
+  if (startChar < 0) {
+    return null
+  }
+
+  const endChar = startChar + cueText.length
+  fallbackSearchStartByKey.set(searchKey, endChar)
+  return { startChar, endChar }
+}
+
+function resolveSegmentSourceRange(
+  cue: LyricCue,
+  segmentId: string,
+  cueRange: LyricCueSourceRange,
+): LyricCueSourceRange | null {
+  let offset = 0
+
+  for (const segment of cue.segments) {
+    const startChar = cueRange.startChar + offset
+    const endChar = startChar + segment.text.length
+    if (segment.id === segmentId) {
+      return { startChar, endChar }
+    }
+
+    offset += segment.text.length + 1
+  }
+
+  return null
+}
+
+function splitLyricDocumentByHighlights(
+  documentText: string,
+  highlights: readonly LyricDocumentHighlight[],
+): LyricDocumentFragment[] {
+  if (documentText.length === 0) {
+    return []
+  }
+
+  const boundaries = new Set([0, documentText.length])
+  const connectedBoundaries = getConnectedHighlightBoundaries(
+    documentText,
+    highlights,
+  )
+  highlights.forEach((highlight) => {
+    if (!connectedBoundaries.has(highlight.startChar)) {
+      boundaries.add(highlight.startChar)
+    }
+    if (!connectedBoundaries.has(highlight.endChar)) {
+      boundaries.add(highlight.endChar)
+    }
+  })
+  const sortedBoundaries = [...boundaries].sort(
+    (first, second) => first - second,
+  )
+
+  return sortedBoundaries.slice(0, -1).map((startChar, index) => {
+    const endChar = sortedBoundaries[index + 1]
+    const coveredHighlights = highlights.filter((highlight) =>
+      rangesOverlap(highlight, { startChar, endChar }),
+    )
+
+    return {
+      id: `${startChar}-${endChar}`,
+      text: documentText.slice(startChar, endChar),
+      highlights: coveredHighlights,
+    }
+  })
+}
+
+function splitHarmonyDocumentByHighlights({
+  documentText,
+  partMarkHighlights,
+}: {
+  documentText: string
+  partMarkHighlights: readonly PartMarkDocumentHighlight[]
+}): HarmonyDocumentFragment[] {
+  if (documentText.length === 0) {
+    return []
+  }
+
+  const boundaries = new Set([0, documentText.length])
+  partMarkHighlights.forEach((highlight) => {
+    boundaries.add(highlight.startChar)
+    boundaries.add(highlight.endChar)
+  })
+
+  const sortedBoundaries = [...boundaries].sort(
+    (first, second) => first - second,
+  )
+
+  return sortedBoundaries.slice(0, -1).map((startChar, index) => {
+    const endChar = sortedBoundaries[index + 1]
+    const range = { startChar, endChar }
+
+    return {
+      id: `${startChar}-${endChar}`,
+      text: documentText.slice(startChar, endChar),
+      partMarkHighlights: partMarkHighlights.filter((highlight) =>
+        rangesOverlap(highlight, range),
+      ),
+    }
+  })
+}
+
+function getConnectedHighlightBoundaries(
+  documentText: string,
+  highlights: readonly LyricDocumentHighlight[],
+): Set<number> {
+  const connectedBoundaries = new Set<number>()
+  const linkedHighlights = highlights
+    .filter((highlight) => highlight.linkId)
+    .sort((first, second) => first.startChar - second.startChar)
+
+  linkedHighlights.forEach((previousHighlight) => {
+    const nextHighlight = linkedHighlights.find(
+      (highlight) =>
+        highlight.linkId === previousHighlight.linkId &&
+        highlight.startChar > previousHighlight.endChar &&
+        documentText
+          .slice(previousHighlight.endChar, highlight.startChar)
+          .trim().length === 0,
+    )
+
+    if (nextHighlight) {
+      connectedBoundaries.add(previousHighlight.endChar)
+      connectedBoundaries.add(nextHighlight.startChar)
+    }
+  })
+
+  return connectedBoundaries
+}
+
+function createLyricHighlightStyle(
+  highlights: readonly LyricDocumentHighlight[],
+  selectedLaneId: string,
+): CSSProperties {
+  const selectedHighlight = highlights.find(
+    (highlight) => highlight.laneId === selectedLaneId,
+  )
+  const primaryHighlight = selectedHighlight ?? highlights[0]
+  const underlineColors = [
+    ...(selectedHighlight ? [selectedHighlight.color] : []),
+    ...highlights
+      .map((highlight) => highlight.color)
+      .filter((color) => color !== selectedHighlight?.color),
+  ].slice(0, 3)
+
+  return {
+    backgroundColor: `${primaryHighlight.color}33`,
+    boxShadow: underlineColors
+      .map((color, index) => `inset 0 -${(index + 1) * 3}px 0 ${color}`)
+      .join(', '),
+  }
+}
+
+function formatLyricHighlightTitle(
+  highlights: readonly LyricDocumentHighlight[],
+): string {
+  return highlights.map((highlight) => highlight.laneName).join(', ')
+}
+
+function getLaneHighlightColor(
+  laneId: string,
+  project: EazyChorusProject,
+): string {
+  const lane = project.lyricLanes.find((item) => item.id === laneId)
+  return lane?.partId ? getPartColor(lane.partId, project.parts) : '#0f766e'
+}
+
+function isValidSourceRange(
+  range: LyricCueSourceRange | undefined,
+  documentLength: number,
+): range is LyricCueSourceRange {
+  return (
+    range !== undefined &&
+    Number.isFinite(range.startChar) &&
+    Number.isFinite(range.endChar) &&
+    range.startChar >= 0 &&
+    range.startChar < range.endChar &&
+    range.endChar <= documentLength
+  )
+}
+
+function rangesOverlap(
+  first: LyricCueSourceRange,
+  second: LyricCueSourceRange,
+): boolean {
+  return first.startChar < second.endChar && second.startChar < first.endChar
+}
+
 function getSelectionTextLengthBefore(
   element: HTMLElement,
   boundary: { node: Node; offset: number },
@@ -2672,38 +4420,150 @@ function createExistingMediaPathSet(project: EazyChorusProject): Set<string> {
   return new Set(project.media.map((track) => track.path))
 }
 
+function findReusableAudioPartIndex(
+  parts: readonly Part[],
+  media: readonly MediaTrack[],
+): number {
+  return parts.findIndex(
+    (part) =>
+      part.defaultTrackId === undefined &&
+      !media.some(
+        (track) => track.role === 'part-audio' && track.partId === part.id,
+      ),
+  )
+}
+
+function getAudioPartName(file: File): string {
+  return stripFileExtension(file.name)
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isLikelyMrAudioFile(file: File): boolean {
+  const normalizedName = stripFileExtension(file.name)
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+
+  return /\b(mr|mix|full mix|inst|instrumental|karaoke|off vocal)\b/.test(
+    normalizedName,
+  )
+}
+
+function stripFileExtension(fileName: string): string {
+  const extensionIndex = fileName.lastIndexOf('.')
+  return extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName
+}
+
+function createPartMarkDocumentStyle(
+  highlights: readonly PartMarkDocumentHighlight[],
+  parts: readonly Part[],
+): CSSProperties {
+  const primaryHighlight = highlights[0]
+  const primaryColor = getPartColor(primaryHighlight.partId, parts)
+  const colors = highlights
+    .map((highlight) => getPartColor(highlight.partId, parts))
+    .filter((color, index, allColors) => allColors.indexOf(color) === index)
+    .slice(0, 3)
+
+  return {
+    backgroundColor: `${primaryColor}40`,
+    boxShadow: colors
+      .map((color, index) => `inset 0 -${(index + 1) * 3}px 0 ${color}`)
+      .join(', '),
+  }
+}
+
+function formatPartMarkDocumentTitle(
+  highlights: readonly PartMarkDocumentHighlight[],
+  parts: readonly Part[],
+): string {
+  return highlights
+    .map(
+      (highlight) => parts.find((part) => part.id === highlight.partId)?.name,
+    )
+    .filter((partName): partName is string => Boolean(partName))
+    .join(', ')
+}
+
 function createPartMarkFragmentStyle(
   marks: readonly PartMark[],
   parts: readonly Part[],
+  focusedPartId: string | null = null,
 ): CSSProperties {
-  const highlightMark = marks.find((mark) => mark.style === 'highlight')
-  const lineAboveMark = marks.find((mark) => mark.style === 'line-above')
-  const lineBelowMark = marks.find((mark) => mark.style === 'line-below')
+  const highlightMark = getPartMarksByStyle(marks, parts, 'highlight')[0]
   const style: CSSProperties = {}
 
-  if (highlightMark) {
+  if (focusedPartId && marks.length > 0) {
+    style.backgroundColor = `${getPartColor(focusedPartId, parts)}40`
+  } else if (highlightMark) {
     style.backgroundColor = `${getPartColor(highlightMark.partId, parts)}33`
-  }
-  if (lineAboveMark) {
-    style.borderTop = `3px solid ${getPartColor(lineAboveMark.partId, parts)}`
-  }
-  if (lineBelowMark) {
-    style.borderBottom = `3px solid ${getPartColor(lineBelowMark.partId, parts)}`
   }
 
   return style
 }
 
-function createPartSwatchStyle(
-  mark: PartMark,
+function getPartMarksByStyle(
+  marks: readonly PartMark[],
   parts: readonly Part[],
-): CSSProperties {
-  const color = getPartColor(mark.partId, parts)
+  style: PartMark['style'],
+): PartMark[] {
+  return sortPartMarksByLevel(
+    marks.filter((mark) => mark.style === style),
+    parts,
+    'near-to-far',
+  )
+}
 
-  return {
-    borderColor: color,
-    backgroundColor: `${color}20`,
+function getPartMarksForLineStack(
+  marks: readonly PartMark[],
+  parts: readonly Part[],
+  style: 'line-above' | 'line-below',
+): PartMark[] {
+  return sortPartMarksByLevel(
+    marks.filter((mark) => mark.style === style),
+    parts,
+    style === 'line-above' ? 'far-to-near' : 'near-to-far',
+  )
+}
+
+function sortPartMarksByLevel(
+  marks: readonly PartMark[],
+  parts: readonly Part[],
+  direction: 'near-to-far' | 'far-to-near',
+): PartMark[] {
+  const partOrder = new Map(parts.map((part, index) => [part.id, index]))
+
+  return [...marks].sort((first, second) => {
+    const firstPart = parts.find((part) => part.id === first.partId)
+    const secondPart = parts.find((part) => part.id === second.partId)
+    const firstLevel = firstPart?.harmonyLevel ?? MIN_HARMONY_LEVEL
+    const secondLevel = secondPart?.harmonyLevel ?? MIN_HARMONY_LEVEL
+    const levelDelta =
+      direction === 'near-to-far'
+        ? firstLevel - secondLevel
+        : secondLevel - firstLevel
+
+    if (levelDelta !== 0) {
+      return levelDelta
+    }
+
+    return (
+      (partOrder.get(first.partId) ?? Number.MAX_SAFE_INTEGER) -
+      (partOrder.get(second.partId) ?? Number.MAX_SAFE_INTEGER)
+    )
+  })
+}
+
+function normalizeHarmonyLevelInput(value: number): number {
+  if (!Number.isFinite(value)) {
+    return MIN_HARMONY_LEVEL
   }
+
+  return Math.min(
+    MAX_HARMONY_LEVEL,
+    Math.max(MIN_HARMONY_LEVEL, Math.round(value)),
+  )
 }
 
 function formatPartMarkLabel(mark: PartMark, parts: readonly Part[]): string {
@@ -2724,6 +4584,43 @@ function formatPartMarkTitle(
 
 function getPartColor(partId: string, parts: readonly Part[]): string {
   return parts.find((part) => part.id === partId)?.color ?? '#64748b'
+}
+
+function getLaneName(laneId: string, project: EazyChorusProject): string {
+  return project.lyricLanes.find((lane) => lane.id === laneId)?.name ?? laneId
+}
+
+function formatLanePartMatch(
+  lane: LyricLane,
+  parts: readonly Part[],
+  media: readonly MediaTrack[],
+): string {
+  const part = parts.find((item) => item.id === lane.partId)
+  if (!part) {
+    return 'part 미연결'
+  }
+
+  return `${part.name} / ${formatPartAudioVariant(part, media)}`
+}
+
+function formatPartAudioVariant(
+  part: Part,
+  media: readonly MediaTrack[],
+): string {
+  const activeTrack =
+    media.find((track) => track.id === part.defaultTrackId) ??
+    media.find(
+      (track) =>
+        track.role === 'part-audio' &&
+        track.partId === part.id &&
+        track.enabled,
+    )
+
+  if (!activeTrack) {
+    return 'audio variant 미지정'
+  }
+
+  return `${activeTrack.title} / ${activeTrack.variant ?? 'custom'}`
 }
 
 function formatTrackRole(track: MediaTrack, parts: readonly Part[]): string {
@@ -2764,10 +4661,10 @@ function formatCueRange(cue: LyricCue): string {
   return `${formatDuration(cue.startMs)} - ${formatDuration(cue.endMs)}`
 }
 
-function formatCueState(cue: LyricCue): string {
-  return cue.startMs === 0 && cue.endMs - cue.startMs <= 1
-    ? 'unsynced'
-    : 'synced'
+function formatSyncCueRange(cue: LyricCue): string {
+  return isCueOpenForSync(cue)
+    ? `${formatDuration(cue.startMs)} - End 대기`
+    : formatCueRange(cue)
 }
 
 function clampPosition(positionMs: number, durationMs: number): number {
@@ -2789,6 +4686,13 @@ function getErrorMessage(error: unknown): string {
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  return (
+    isTextEntryKeyboardTarget(target) ||
+    (target instanceof HTMLElement && target instanceof HTMLButtonElement)
+  )
+}
+
+function isTextEntryKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false
   }
@@ -2797,8 +4701,7 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
     target.isContentEditable ||
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    target instanceof HTMLButtonElement
+    target instanceof HTMLSelectElement
   )
 }
 

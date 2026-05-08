@@ -104,11 +104,7 @@ type ImportBlock = {
   id: string
   sourceLines: string[]
   exportedLines: string[]
-  pattern:
-    | 'jp-ko-translation'
-    | 'english-translation'
-    | 'manual'
-    | 'unknown'
+  pattern: 'jp-ko-translation' | 'english-translation' | 'manual' | 'unknown'
   confidence: 'high' | 'medium' | 'low'
   warnings: string[]
 }
@@ -138,6 +134,7 @@ Confirm 화면은 좌우 비교 구조다.
 - low confidence block 강조
 - 오른쪽 추출 결과 직접 수정 가능
 - confirm 이후 오른쪽 결과만 lyric draft로 저장
+- 저장된 lyric draft는 Lyrics 단계에서 다시 직접 수정 가능
 
 ## 7. Lyric Draft
 
@@ -168,6 +165,8 @@ Duet B lane
 ```
 
 Lane은 편집용 구조이면서 cue의 소속을 나타낸다.
+
+편집 화면에서는 전체 가사를 중앙 작업면에 두고, Lane 범례와 추가/수정 컨트롤은 오른쪽 사이드바에 둔다. 범례는 작업 카드 안에 중첩하지 않는다.
 
 ## 9. Main/Sub lyric role
 

@@ -154,6 +154,7 @@ type Part = {
   defaultTrackId?: string
   guidePosition: 'none' | 'above' | 'below'
   defaultMarkStyle: 'line-above' | 'line-below' | 'highlight'
+  harmonyLevel: number
 }
 ```
 
@@ -167,9 +168,12 @@ type Part = {
   "description": "메인보다 높은 화음. 후렴에서 중심적으로 들어온다.",
   "defaultTrackId": "upper-fx",
   "guidePosition": "above",
-  "defaultMarkStyle": "line-above"
+  "defaultMarkStyle": "line-above",
+  "harmonyLevel": 2
 }
 ```
+
+`harmonyLevel`은 같은 표시 방향 안에서 화음 표시가 쌓이는 순서를 정한다. `line-above`에서는 값이 클수록 더 위에, `line-below`에서는 값이 클수록 더 아래에 표시된다. 이전 파일처럼 값이 없으면 import 시 `1`로 보정한다.
 
 ## 9. LyricDraftLine
 
@@ -358,7 +362,8 @@ type PartMark = {
       "description": "곡의 전체적인 가사 흐름을 담당한다.",
       "defaultTrackId": "main-fx",
       "guidePosition": "none",
-      "defaultMarkStyle": "highlight"
+      "defaultMarkStyle": "highlight",
+      "harmonyLevel": 1
     },
     {
       "id": "upper",
@@ -367,7 +372,8 @@ type PartMark = {
       "description": "메인보다 높은 화음.",
       "defaultTrackId": "upper-fx",
       "guidePosition": "above",
-      "defaultMarkStyle": "line-above"
+      "defaultMarkStyle": "line-above",
+      "harmonyLevel": 2
     }
   ],
   "lyricDraft": [
