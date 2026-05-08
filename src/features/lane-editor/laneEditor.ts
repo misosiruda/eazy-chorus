@@ -1,6 +1,7 @@
 import type {
   EazyChorusProject,
   LyricCue,
+  LyricCueSourceRange,
   LyricDraftLine,
   LyricLane,
   LyricRole,
@@ -19,6 +20,7 @@ type NewLyricLaneOptions = {
   name: string
   defaultRole: LyricRole
   existingLanes: readonly LyricLane[]
+  partId?: string
 }
 
 type NewCueFromDraftOptions = {
@@ -27,10 +29,21 @@ type NewCueFromDraftOptions = {
   existingCues: readonly LyricCue[]
 }
 
+type NewCueFromTextSelectionOptions = {
+  text: string
+  lane: LyricLane
+  existingCues: readonly LyricCue[]
+  linkId?: string
+  sourceId?: string
+  sourceRange?: LyricCueSourceRange
+  role?: LyricRole
+}
+
 export function createLyricLane({
   name,
   defaultRole,
   existingLanes,
+  partId,
 }: NewLyricLaneOptions): LyricLane {
   const trimmedName = name.trim() || `Lane ${existingLanes.length + 1}`
   const baseId = slugify(trimmedName) || `lane-${existingLanes.length + 1}`
@@ -44,6 +57,7 @@ export function createLyricLane({
     name: trimmedName,
     order,
     defaultRole,
+    ...(partId ? { partId } : {}),
   }
 }
 
@@ -52,23 +66,43 @@ export function createCueFromDraftLine({
   lane,
   existingCues,
 }: NewCueFromDraftOptions): LyricCue {
+  return createCueFromTextSelection({
+    text: draftLine.text,
+    lane,
+    existingCues,
+    sourceId: draftLine.id,
+  })
+}
+
+export function createCueFromTextSelection({
+  text,
+  lane,
+  existingCues,
+  linkId,
+  sourceId,
+  sourceRange,
+  role,
+}: NewCueFromTextSelectionOptions): LyricCue {
+  const normalizedText = text.trim()
   const cueId = createUniqueId(
-    `cue-${draftLine.id}`,
+    `cue-${sourceId ? slugify(sourceId) : slugify(normalizedText) || 'selection'}`,
     new Set(existingCues.map((cue) => cue.id)),
   )
   const segment: LyricSegment = {
     id: `${cueId}-seg-1`,
-    role: lane.defaultRole,
-    text: draftLine.text,
-    partIds: [],
+    role: role ?? lane.defaultRole,
+    text: normalizedText,
+    partIds: lane.partId ? [lane.partId] : [],
   }
 
   return {
     id: cueId,
     laneId: lane.id,
+    ...(linkId ? { linkId } : {}),
     startMs: 0,
     endMs: MIN_CUE_DURATION_MS,
     segments: [segment],
+    ...(sourceRange ? { sourceRange } : {}),
   }
 }
 
@@ -221,6 +255,24 @@ export function getTimelineCues(project: EazyChorusProject): LyricCue[] {
   )
 }
 
+export function getSyncCueSequence(project: EazyChorusProject): LyricCue[] {
+  const laneOrderById = new Map(
+    project.lyricLanes.map((lane) => [lane.id, lane.order]),
+  )
+  const cueIndexById = new Map(
+    project.cues.map((cue, index) => [cue.id, index]),
+  )
+
+  return [...project.cues].sort(
+    (first, second) =>
+      getCueSourceOrder(first) - getCueSourceOrder(second) ||
+      getCueSourceEndOrder(first) - getCueSourceEndOrder(second) ||
+      (laneOrderById.get(first.laneId) ?? 0) -
+        (laneOrderById.get(second.laneId) ?? 0) ||
+      (cueIndexById.get(first.id) ?? 0) - (cueIndexById.get(second.id) ?? 0),
+  )
+}
+
 export function getNextCueId(
   project: EazyChorusProject,
   cueId: string,
@@ -231,6 +283,16 @@ export function getNextCueId(
   }
 
   const cueSequence = getLaneCueSequence(project, cue.laneId)
+  const cueIndex = cueSequence.findIndex((item) => item.id === cueId)
+
+  return cueSequence[cueIndex + 1]?.id ?? null
+}
+
+export function getNextSyncCueId(
+  project: EazyChorusProject,
+  cueId: string,
+): string | null {
+  const cueSequence = getSyncCueSequence(project)
   const cueIndex = cueSequence.findIndex((item) => item.id === cueId)
 
   return cueSequence[cueIndex + 1]?.id ?? null
@@ -306,6 +368,14 @@ export function getPartMarksForCue(
 
 function normalizePositionMs(positionMs: number): number {
   return Number.isFinite(positionMs) ? Math.max(0, Math.round(positionMs)) : 0
+}
+
+function getCueSourceOrder(cue: LyricCue): number {
+  return cue.sourceRange?.startChar ?? Number.MAX_SAFE_INTEGER
+}
+
+function getCueSourceEndOrder(cue: LyricCue): number {
+  return cue.sourceRange?.endChar ?? Number.MAX_SAFE_INTEGER
 }
 
 function createUniqueId(
