@@ -61,6 +61,7 @@ export type Part = {
   defaultTrackId?: string
   guidePosition: GuidePosition
   defaultMarkStyle: MarkStyle
+  harmonyLevel: number
 }
 
 export type LyricLane = {
@@ -68,6 +69,7 @@ export type LyricLane = {
   name: string
   order: number
   defaultRole: LyricRole
+  partId?: string
 }
 
 export type LyricSegment = {
@@ -77,12 +79,19 @@ export type LyricSegment = {
   partIds: string[]
 }
 
+export type LyricCueSourceRange = {
+  startChar: number
+  endChar: number
+}
+
 export type LyricCue = {
   id: string
   laneId: string
+  linkId?: string
   startMs: number
   endMs: number
   segments: LyricSegment[]
+  sourceRange?: LyricCueSourceRange
 }
 
 export type PartMark = {

@@ -24,6 +24,48 @@ describe('project-file feature', () => {
     expect(validation.issues).toEqual([])
   })
 
+  it('normalizes missing part harmony levels from older project payloads', () => {
+    const { project, mediaFiles } = createProjectPackageFixture()
+    const legacyProject = {
+      ...project,
+      parts: project.parts.map((part) => {
+        const legacyPart = { ...part } as Record<string, unknown>
+        delete legacyPart.harmonyLevel
+        return legacyPart
+      }),
+    }
+
+    const validation = validateProjectPayload(
+      legacyProject,
+      new Set(Object.keys(mediaFiles)),
+    )
+
+    expect(validation.issues).toEqual([])
+    expect(validation.project?.parts[0].harmonyLevel).toBe(1)
+  })
+
+  it('rejects invalid part harmony levels', () => {
+    const { project, mediaFiles } = createProjectPackageFixture()
+
+    const validation = validateProjectPayload(
+      {
+        ...project,
+        parts: project.parts.map((part) =>
+          part.id === 'main-vocal' ? { ...part, harmonyLevel: 0 } : part,
+        ),
+      },
+      new Set(Object.keys(mediaFiles)),
+    )
+
+    expect(validation.project).toBeNull()
+    expect(validation.issues).toContainEqual(
+      expect.objectContaining({
+        path: 'parts[0].harmonyLevel',
+        message: '1 이상의 정수여야 합니다.',
+      }),
+    )
+  })
+
   it('exports and imports a .eazychorus ZIP package with media restored', async () => {
     const packageFixture = createProjectPackageFixture()
 
@@ -75,6 +117,30 @@ describe('project-file feature', () => {
           severity: 'error',
           path: 'media[1].path',
           message: 'ZIP 내부에 media 파일이 없습니다: media/vocal-fx.wav',
+        }),
+      ]),
+    )
+  })
+
+  it('validates lyric lane part references', () => {
+    const { project, mediaFiles } = createProjectPackageFixture()
+    const invalidProject: EazyChorusProject = {
+      ...project,
+      lyricLanes: [{ ...project.lyricLanes[0], partId: 'ghost-part' }],
+    }
+
+    const validation = validateProjectPayload(
+      invalidProject,
+      new Set(Object.keys(mediaFiles)),
+    )
+
+    expect(validation.project).toBeNull()
+    expect(validation.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: 'error',
+          path: 'lyricLanes[0].partId',
+          message: '존재하지 않는 part id입니다: ghost-part',
         }),
       ]),
     )

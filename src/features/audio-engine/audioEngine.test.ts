@@ -1,6 +1,7 @@
 import {
   AudioPlaybackEngine,
   getEffectiveTrackGain,
+  getSyncPlaybackTracks,
   selectPartAudioVariant,
   type AudioBufferHandle,
   type AudioBufferSourceHandle,
@@ -72,6 +73,56 @@ describe('audio-engine feature', () => {
       nextProject.media.find((track) => track.id === noFxTrack.id)?.enabled,
     ).toBe(true)
     expect(nextProject.parts[0].defaultTrackId).toBe(noFxTrack.id)
+  })
+
+  it('uses selected part defaults as active tracks for sync playback', () => {
+    const project = createNewProject({
+      id: 'project-001',
+      now: new Date('2026-05-06T00:00:00.000Z'),
+    })
+    const mrTrack = createTrack({
+      id: 'mr',
+      path: 'media/mr.mp3',
+      role: 'mr',
+      volume: 0.7,
+    })
+    const selectedTrack = createTrack({
+      id: 'main-guide',
+      path: 'media/main-guide.wav',
+      role: 'part-audio',
+      partId: 'main-vocal',
+      volume: 0.4,
+      enabled: false,
+    })
+    const unusedTrack = createTrack({
+      id: 'main-alt',
+      path: 'media/main-alt.wav',
+      role: 'part-audio',
+      partId: 'main-vocal',
+      volume: 0.9,
+      enabled: false,
+    })
+
+    const playbackTracks = getSyncPlaybackTracks({
+      ...project,
+      media: [mrTrack, selectedTrack, unusedTrack],
+      parts: project.parts.map((part) =>
+        part.id === 'main-vocal'
+          ? { ...part, defaultTrackId: selectedTrack.id }
+          : part,
+      ),
+    })
+
+    expect(playbackTracks.find((track) => track.id === 'mr')).toEqual(
+      expect.objectContaining({ enabled: true, volume: 0.7 }),
+    )
+    expect(playbackTracks.find((track) => track.id === 'main-guide')).toEqual(
+      expect.objectContaining({ enabled: true, volume: 0.4 }),
+    )
+    expect(playbackTracks.find((track) => track.id === 'main-alt')).toEqual(
+      expect.objectContaining({ enabled: false, volume: 0.9 }),
+    )
+    expect(selectedTrack.enabled).toBe(false)
   })
 
   it('starts enabled tracks at the same context time and seek offset', async () => {

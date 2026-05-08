@@ -28,6 +28,7 @@ const MARK_STYLES = ['line-above', 'line-below', 'highlight'] as const
 const LYRIC_ROLES = ['main', 'sub'] as const
 const DURATION_WARNING_THRESHOLD_MS = 3000
 const UNSYNCED_CUE_DURATION_MS = 1
+const DEFAULT_HARMONY_LEVEL = 1
 
 export function validateProjectPayload(
   payload: unknown,
@@ -59,7 +60,7 @@ export function validateProjectPayload(
   const mediaIds = validateMedia(mediaItems, mediaPaths, issues)
   const partIds = validateParts(partItems, mediaIds, issues)
   validateLyricDraft(lyricDraftItems, issues)
-  const laneIds = validateLanes(laneItems, issues)
+  const laneIds = validateLanes(laneItems, partIds, issues)
   const segmentTexts = validateCues(cueItems, laneIds, partIds, issues)
 
   validateMediaPartReferences(mediaItems, partIds, issues)
@@ -278,6 +279,11 @@ function validateParts(
       `${pathPrefix}.defaultMarkStyle`,
       issues,
     )
+    validateHarmonyLevel(
+      part.harmonyLevel,
+      `${pathPrefix}.harmonyLevel`,
+      issues,
+    )
   })
 
   return partIds
@@ -285,6 +291,7 @@ function validateParts(
 
 function validateLanes(
   laneItems: readonly unknown[],
+  partIds: ReadonlySet<string>,
   issues: ValidationIssue[],
 ): Set<string> {
   const laneIds = new Set<string>()
@@ -312,6 +319,14 @@ function validateLanes(
       `${pathPrefix}.defaultRole`,
       issues,
     )
+    const partId = optionalString(lane.partId, `${pathPrefix}.partId`, issues)
+    if (partId && !partIds.has(partId)) {
+      addError(
+        issues,
+        `${pathPrefix}.partId`,
+        `존재하지 않는 part id입니다: ${partId}`,
+      )
+    }
   })
 
   return laneIds
@@ -383,6 +398,7 @@ function validateCues(
         `존재하지 않는 lane id입니다: ${laneId}`,
       )
     }
+    optionalString(cue.linkId, `${cuePath}.linkId`, issues)
 
     const startMs = requireNumber(cue.startMs, `${cuePath}.startMs`, issues)
     const endMs = requireNumber(cue.endMs, `${cuePath}.endMs`, issues)
@@ -653,6 +669,25 @@ function optionalNumber(
   return requireNumber(value, path, issues)
 }
 
+function validateHarmonyLevel(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (value === undefined) {
+    return
+  }
+
+  const level = requireNumber(value, path, issues)
+  if (level === undefined) {
+    return
+  }
+
+  if (!Number.isInteger(level) || level < 1) {
+    addError(issues, path, '1 이상의 정수여야 합니다.')
+  }
+}
+
 function requireBoolean(
   value: unknown,
   path: string,
@@ -706,8 +741,20 @@ function normalizeProjectPayload(
 ): EazyChorusProject {
   return {
     ...project,
+    parts: project.parts.map((part) => ({
+      ...part,
+      harmonyLevel: normalizeHarmonyLevel(
+        (part as { harmonyLevel?: unknown }).harmonyLevel,
+      ),
+    })),
     lyricDraft: Array.isArray(root.lyricDraft) ? project.lyricDraft : [],
   }
+}
+
+function normalizeHarmonyLevel(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1
+    ? value
+    : DEFAULT_HARMONY_LEVEL
 }
 
 function createSegmentKey(cueId: string, segmentId: string): string {

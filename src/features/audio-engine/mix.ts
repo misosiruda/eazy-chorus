@@ -13,6 +13,22 @@ export function getEnabledTracks(tracks: readonly MediaTrack[]): MediaTrack[] {
   return tracks.filter((track) => track.enabled)
 }
 
+export function getSyncPlaybackTracks(
+  project: EazyChorusProject,
+): MediaTrack[] {
+  const defaultTrackIds = new Set(
+    project.parts
+      .map((part) => part.defaultTrackId)
+      .filter((trackId): trackId is string => Boolean(trackId)),
+  )
+
+  return project.media.map((track) =>
+    track.role === 'part-audio' && defaultTrackIds.has(track.id)
+      ? { ...track, enabled: true }
+      : track,
+  )
+}
+
 export function getEffectiveTrackGain(
   track: MediaTrack,
   tracks: readonly MediaTrack[],

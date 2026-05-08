@@ -15,6 +15,7 @@ export {
   getEffectiveTrackGain,
   getEnabledTracks,
   getProjectDurationMs,
+  getSyncPlaybackTracks,
   selectPartAudioVariant,
   updateProjectWithDecodedDurations,
   type TrackDecodeResult,
