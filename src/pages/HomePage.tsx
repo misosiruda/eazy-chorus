@@ -163,6 +163,7 @@ export function HomePage() {
   const [newPartName, setNewPartName] = useState('')
   const [statusMessage, setStatusMessage] =
     useState('새 프로젝트가 준비되었습니다.')
+  const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
   const [importBlocks, setImportBlocks] = useState<ImportBlock[]>([])
@@ -1823,161 +1824,119 @@ export function HomePage() {
     isEditorMode &&
     (editorWizardStep === 'lanes' || editorWizardStep === 'harmony')
   const workspaceGridClassName = isEditorMode
-    ? editorWizardStep === 'preview'
-      ? 'workspace-grid editor-wizard-grid editor-preview-grid'
-      : hasAssignmentSidebar
-        ? 'workspace-grid editor-wizard-grid editor-sidebar-grid'
-        : 'workspace-grid editor-wizard-grid'
+    ? hasAssignmentSidebar
+      ? 'workspace-grid editor-workspace-grid editor-sidebar-grid'
+      : 'workspace-grid editor-workspace-grid'
     : 'workspace-grid practice-grid'
+  const appContentClassName = [
+    'app-content',
+    isProjectFileBusy ? 'app-content-busy' : '',
+    isWorkspaceSidebarOpen ? 'app-content-sidebar-open' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const workspaceStats = isEditorMode
+    ? `media ${project.media.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`
+    : `cue ${timelineCues.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`
+  const editorProgressPercent =
+    ((editorWizardStepIndex + 1) / EDITOR_WIZARD_STEPS.length) * 100
+  const editorWizardControls = isEditorMode ? (
+    <section
+      className="editor-wizard-rail"
+      aria-labelledby="editor-wizard-title"
+    >
+      <div className="section-heading">
+        <h2 id="editor-wizard-title">Steps</h2>
+        <span>
+          {editorWizardStepIndex + 1}/{EDITOR_WIZARD_STEPS.length}
+        </span>
+      </div>
+
+      <div className="editor-wizard-steps" aria-label="편집 단계">
+        {EDITOR_WIZARD_STEPS.map((step, index) => (
+          <button
+            className={
+              step.value === editorWizardStep
+                ? 'editor-wizard-step editor-wizard-step-active'
+                : 'editor-wizard-step'
+            }
+            type="button"
+            aria-current={step.value === editorWizardStep ? 'step' : undefined}
+            aria-pressed={step.value === editorWizardStep}
+            onClick={() => setEditorWizardStep(step.value)}
+            key={step.value}
+          >
+            <span className="editor-wizard-step-number">{index + 1}</span>
+            <span className="editor-wizard-step-copy">
+              <strong>{step.label}</strong>
+              <small>{getEditorWizardStepSummary(step.value)}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="editor-wizard-actions">
+        <button
+          type="button"
+          onClick={() => moveEditorWizardStep(-1)}
+          disabled={editorWizardStepIndex === 0}
+        >
+          이전
+        </button>
+        <button
+          type="button"
+          onClick={() => moveEditorWizardStep(1)}
+          disabled={editorWizardStepIndex === EDITOR_WIZARD_STEPS.length - 1}
+        >
+          다음
+        </button>
+      </div>
+    </section>
+  ) : null
 
   return (
     <main className="app-shell">
-      <div
-        className={
-          isProjectFileBusy ? 'app-content app-content-busy' : 'app-content'
-        }
-        aria-hidden={isProjectFileBusy}
-      >
+      <div className={appContentClassName} aria-hidden={isProjectFileBusy}>
         <header className="workspace-header">
           <div className="workspace-title-stack">
             <p className="app-kicker">Eazy Chorus</p>
             <h1>{workspaceTitle}</h1>
-            <nav className="workspace-page-nav" aria-label="페이지 이동">
-              {WORKSPACE_PAGE_OPTIONS.map((option) => (
-                <Link
-                  className={
-                    workspaceMode === option.value
-                      ? 'workspace-page-link workspace-page-link-active'
-                      : 'workspace-page-link'
-                  }
-                  to={option.path}
-                  aria-current={
-                    workspaceMode === option.value ? 'page' : undefined
-                  }
-                  key={option.value}
-                >
-                  {option.label}
-                </Link>
-              ))}
-            </nav>
           </div>
-          <div className="workspace-actions" aria-label="프로젝트 파일 액션">
-            {isEditorMode ? (
-              <button
-                type="button"
-                onClick={resetToNewProject}
-                disabled={isProjectFileBusy}
-              >
-                새 프로젝트
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => importInputRef.current?.click()}
-              disabled={isProjectFileBusy}
-            >
-              파일 열기
-            </button>
-            <button
-              type="button"
-              onClick={() => void openSampleProject()}
-              disabled={isProjectFileBusy}
-            >
-              샘플 열기
-            </button>
-            {isEditorMode ? (
-              <button
-                type="button"
-                onClick={exportCurrentProject}
-                disabled={exportDisabled || isProjectFileBusy}
-              >
-                {isExporting ? '내보내는 중' : '.eazychorus 저장'}
-              </button>
-            ) : null}
-            <input
-              ref={importInputRef}
-              className="visually-hidden"
-              type="file"
-              accept=".eazychorus,application/zip"
-              aria-label=".eazychorus 프로젝트 파일 열기"
-              onChange={(event) => {
-                void handleImportFile(event.currentTarget.files?.[0])
-                event.currentTarget.value = ''
-              }}
-            />
-          </div>
-        </header>
 
-        <section className="status-strip" aria-live="polite">
-          <strong>{statusMessage}</strong>
-          <span>
-            {isEditorMode
-              ? `media ${project.media.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`
-              : `cue ${timelineCues.length}개, part ${project.parts.length}개, validation error ${validationErrors.length}개`}
-          </span>
-        </section>
-
-        <div className={workspaceGridClassName}>
-          {isEditorMode ? (
-            <>
-              <section
-                className="editor-wizard-rail"
-                aria-labelledby="editor-wizard-title"
+          <section className="workspace-header-status" aria-live="polite">
+            <div className="workspace-status-line">
+              <strong>{statusMessage}</strong>
+              <span>{workspaceStats}</span>
+            </div>
+            {isEditorMode ? (
+              <div
+                className="workspace-progress"
+                role="progressbar"
+                aria-label="편집 단계 진행률"
+                aria-valuemin={1}
+                aria-valuemax={EDITOR_WIZARD_STEPS.length}
+                aria-valuenow={editorWizardStepIndex + 1}
               >
-                <div className="section-heading">
-                  <h2 id="editor-wizard-title">Steps</h2>
+                <div className="workspace-progress-copy">
+                  <strong>
+                    {EDITOR_WIZARD_STEPS[editorWizardStepIndex]?.label ??
+                      'Step'}
+                  </strong>
                   <span>
                     {editorWizardStepIndex + 1}/{EDITOR_WIZARD_STEPS.length}
                   </span>
                 </div>
-
-                <div className="editor-wizard-steps" aria-label="편집 단계">
-                  {EDITOR_WIZARD_STEPS.map((step, index) => (
-                    <button
-                      className={
-                        step.value === editorWizardStep
-                          ? 'editor-wizard-step editor-wizard-step-active'
-                          : 'editor-wizard-step'
-                      }
-                      type="button"
-                      aria-current={
-                        step.value === editorWizardStep ? 'step' : undefined
-                      }
-                      aria-pressed={step.value === editorWizardStep}
-                      onClick={() => setEditorWizardStep(step.value)}
-                      key={step.value}
-                    >
-                      <span className="editor-wizard-step-number">
-                        {index + 1}
-                      </span>
-                      <span className="editor-wizard-step-copy">
-                        <strong>{step.label}</strong>
-                        <small>{getEditorWizardStepSummary(step.value)}</small>
-                      </span>
-                    </button>
-                  ))}
+                <div className="workspace-progress-track" aria-hidden="true">
+                  <span style={{ width: `${editorProgressPercent}%` }} />
                 </div>
+              </div>
+            ) : null}
+          </section>
+        </header>
 
-                <div className="editor-wizard-actions">
-                  <button
-                    type="button"
-                    onClick={() => moveEditorWizardStep(-1)}
-                    disabled={editorWizardStepIndex === 0}
-                  >
-                    이전
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => moveEditorWizardStep(1)}
-                    disabled={
-                      editorWizardStepIndex === EDITOR_WIZARD_STEPS.length - 1
-                    }
-                  >
-                    다음
-                  </button>
-                </div>
-              </section>
-
+        <div className={workspaceGridClassName}>
+          {isEditorMode ? (
+            <>
               {editorWizardStep === 'project' ? (
                 <>
                   <section
@@ -3557,6 +3516,123 @@ export function HomePage() {
           ) : null}
         </div>
       </div>
+      <aside
+        className={
+          isWorkspaceSidebarOpen
+            ? 'workspace-utility-sidebar workspace-utility-sidebar-open'
+            : 'workspace-utility-sidebar'
+        }
+        aria-label="워크스페이스 도구"
+      >
+        <button
+          className="workspace-utility-toggle"
+          type="button"
+          aria-label={
+            isWorkspaceSidebarOpen
+              ? '워크스페이스 도구 접기'
+              : '워크스페이스 도구 열기'
+          }
+          aria-expanded={isWorkspaceSidebarOpen}
+          title={
+            isWorkspaceSidebarOpen
+              ? '워크스페이스 도구 접기'
+              : '워크스페이스 도구 열기'
+          }
+          onClick={() =>
+            setIsWorkspaceSidebarOpen(
+              (currentSidebarState) => !currentSidebarState,
+            )
+          }
+        >
+          <SidebarToggleIcon isOpen={isWorkspaceSidebarOpen} />
+        </button>
+
+        {isWorkspaceSidebarOpen ? (
+          <div className="workspace-utility-content">
+            <section className="workspace-utility-group">
+              <div className="panel-title-row">
+                <h2>Workspace</h2>
+                <span>{workspaceMode === 'editor' ? '편집' : '연습'}</span>
+              </div>
+              <nav className="workspace-page-nav" aria-label="페이지 이동">
+                {WORKSPACE_PAGE_OPTIONS.map((option) => (
+                  <Link
+                    className={
+                      workspaceMode === option.value
+                        ? 'workspace-page-link workspace-page-link-active'
+                        : 'workspace-page-link'
+                    }
+                    to={option.path}
+                    aria-current={
+                      workspaceMode === option.value ? 'page' : undefined
+                    }
+                    key={option.value}
+                  >
+                    {option.label}
+                  </Link>
+                ))}
+              </nav>
+            </section>
+
+            <section className="workspace-utility-group">
+              <div className="panel-title-row">
+                <h2>Project File</h2>
+                <span>.eazychorus</span>
+              </div>
+              <div
+                className="workspace-actions"
+                aria-label="프로젝트 파일 액션"
+              >
+                {isEditorMode ? (
+                  <button
+                    type="button"
+                    onClick={resetToNewProject}
+                    disabled={isProjectFileBusy}
+                  >
+                    새 프로젝트
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                  disabled={isProjectFileBusy}
+                >
+                  파일 열기
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void openSampleProject()}
+                  disabled={isProjectFileBusy}
+                >
+                  샘플 열기
+                </button>
+                {isEditorMode ? (
+                  <button
+                    type="button"
+                    onClick={exportCurrentProject}
+                    disabled={exportDisabled || isProjectFileBusy}
+                  >
+                    {isExporting ? '내보내는 중' : '.eazychorus 저장'}
+                  </button>
+                ) : null}
+                <input
+                  ref={importInputRef}
+                  className="visually-hidden"
+                  type="file"
+                  accept=".eazychorus,application/zip"
+                  aria-label=".eazychorus 프로젝트 파일 열기"
+                  onChange={(event) => {
+                    void handleImportFile(event.currentTarget.files?.[0])
+                    event.currentTarget.value = ''
+                  }}
+                />
+              </div>
+            </section>
+
+            {editorWizardControls}
+          </div>
+        ) : null}
+      </aside>
       {isProjectFileBusy ? (
         <div
           className="project-file-loading-overlay"
@@ -3571,6 +3647,32 @@ export function HomePage() {
         </div>
       ) : null}
     </main>
+  )
+}
+
+function SidebarToggleIcon({ isOpen }: { isOpen: boolean }) {
+  return (
+    <svg
+      className={
+        isOpen ? 'workspace-sidebar-icon' : 'workspace-sidebar-icon-closed'
+      }
+      width="18"
+      height="18"
+      viewBox="0 0 18 18"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M15.2999 3.40059C15.2999 3.01399 14.9863 2.70039 14.5997 2.70039H3.4001C3.0135 2.70039 2.6999 3.01399 2.6999 3.40059V14.6002C2.6999 14.9868 3.0135 15.3004 3.4001 15.3004H14.5997C14.9863 15.3004 15.2999 14.9868 15.2999 14.6002V3.40059ZM17.0999 14.6002C17.0999 15.9809 15.9804 17.1004 14.5997 17.1004H3.4001C2.01939 17.1004 0.899902 15.9809 0.899902 14.6002V3.40059C0.899902 2.01987 2.01939 0.900391 3.4001 0.900391H14.5997C15.9804 0.900391 17.0999 2.01987 17.0999 3.40059V14.6002Z"
+        fill="currentColor"
+      />
+      <path
+        d="M5.6999 16.2004V1.80039C5.6999 1.30333 6.10285 0.900391 6.5999 0.900391C7.09696 0.900391 7.4999 1.30333 7.4999 1.80039V16.2004C7.4999 16.6974 7.09696 17.1004 6.5999 17.1004C6.10285 17.1004 5.6999 16.6974 5.6999 16.2004Z"
+        fill="currentColor"
+      />
+    </svg>
   )
 }
 
