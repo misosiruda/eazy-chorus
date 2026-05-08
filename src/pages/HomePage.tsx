@@ -43,6 +43,7 @@ import {
   getPartMarksForSegment,
   splitSegmentTextByPartMarks,
   togglePartMark,
+  upsertPartMarkAnnotation,
   type PartMarkTextFragment,
 } from '../features/part-editor'
 import {
@@ -86,8 +87,15 @@ type EditorWizardStep =
   | 'lanes'
   | 'harmony'
   | 'sync'
+  | 'notes'
   | 'preview'
 type ViewerPartFocusMode = 'all' | 'lane' | 'marks'
+type PendingPreviewAnnotation = {
+  partId: string
+  targets: PartMarkDocumentTarget[]
+  selectedText: string
+  note: string
+}
 
 const WORKSPACE_PAGE_OPTIONS: {
   value: WorkspaceMode
@@ -105,6 +113,7 @@ const EDITOR_WIZARD_STEPS: { value: EditorWizardStep; label: string }[] = [
   { value: 'lanes', label: 'Lane' },
   { value: 'harmony', label: 'Sub' },
   { value: 'sync', label: 'Sync' },
+  { value: 'notes', label: 'Notes' },
   { value: 'preview', label: 'Preview' },
 ]
 
@@ -206,14 +215,18 @@ export function HomePage() {
   const [abLoopEndMs, setAbLoopEndMs] = useState<number | null>(null)
   const [viewerCueLoopId, setViewerCueLoopId] = useState<string | null>(null)
   const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false)
+  const [pendingPreviewAnnotation, setPendingPreviewAnnotation] =
+    useState<PendingPreviewAnnotation | null>(null)
   const audioEngineRef = useRef<AudioPlaybackEngine | null>(null)
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const audioInputRef = useRef<HTMLInputElement | null>(null)
+  const previewAnnotationTextareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lyricSourcePreviewRef = useRef<HTMLDivElement | null>(null)
   const lyricExtractPreviewRef = useRef<HTMLDivElement | null>(null)
   const viewerStageRef = useRef<HTMLDivElement | null>(null)
-  const viewerCueRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const viewerCueRefs = useRef<Record<string, HTMLElement | null>>({})
   const viewerAutoScrollingRef = useRef(false)
+  const viewerSelectionHandledRef = useRef(false)
   const syncingLyricScrollRef = useRef(false)
 
   const validationIssues = useMemo(
@@ -231,6 +244,21 @@ export function HomePage() {
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const selectedPart =
     project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
+  const pendingPreviewAnnotationPart = pendingPreviewAnnotation
+    ? project.parts.find((part) => part.id === pendingPreviewAnnotation.partId)
+    : null
+  const selectedPartAnnotations = useMemo(
+    () =>
+      selectedPart
+        ? project.partMarks.filter(
+            (mark) =>
+              mark.partId === selectedPart.id &&
+              typeof mark.note === 'string' &&
+              mark.note.trim().length > 0,
+          )
+        : [],
+    [project.partMarks, selectedPart],
+  )
   const effectiveViewerFocusedPartId =
     viewerFocusedPartId &&
     project.parts.some((part) => part.id === viewerFocusedPartId)
@@ -278,7 +306,7 @@ export function HomePage() {
         documentText: lyricDraftDocumentText,
         cues: timelineCues,
         partMarks: project.partMarks.filter(
-          (mark) => mark.partId === selectedPartId,
+          (mark) => mark.partId === selectedPartId && isVisualPartMark(mark),
         ),
         project,
       }),
@@ -345,6 +373,9 @@ export function HomePage() {
     .filter((group) => group.tracks.length > 0)
   const exportDisabled = isExporting || hasValidationErrors(validationIssues)
   const isEditorMode = workspaceMode === 'editor'
+  const isEditorNotesStep = isEditorMode && editorWizardStep === 'notes'
+  const isViewerSurfaceVisible =
+    !isEditorMode || editorWizardStep === 'preview' || isEditorNotesStep
   const workspaceTitle = isEditorMode ? 'Editor Wizard' : 'Practice Viewer'
   const editorWizardStepIndex = Math.max(
     EDITOR_WIZARD_STEPS.findIndex((step) => step.value === editorWizardStep),
@@ -385,6 +416,11 @@ export function HomePage() {
       return `synced ${syncedCueCount}/${project.cues.length}`
     }
 
+    if (step === 'notes') {
+      const noteCount = project.partMarks.filter(hasPartMarkNote).length
+      return `note ${noteCount}개`
+    }
+
     return `error ${validationErrors.length}개`
   }
 
@@ -416,6 +452,10 @@ export function HomePage() {
       }
 
       if (isEditableKeyboardTarget(event.target)) {
+        return
+      }
+
+      if (isEditorNotesStep) {
         return
       }
 
@@ -458,6 +498,14 @@ export function HomePage() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
+
+  useEffect(() => {
+    if (!pendingPreviewAnnotation) {
+      return
+    }
+
+    previewAnnotationTextareaRef.current?.focus()
+  }, [pendingPreviewAnnotation])
 
   useEffect(() => {
     audioEngineRef.current?.releaseMissingTracks(
@@ -677,6 +725,7 @@ export function HomePage() {
     setAbLoopEndMs(null)
     setViewerCueLoopId(null)
     setIsAutoScrollPaused(false)
+    setPendingPreviewAnnotation(null)
     setStatusMessage('새 프로젝트를 만들었습니다.')
   }
 
@@ -834,6 +883,98 @@ export function HomePage() {
       `${selectedPart.name} Sub를 ${isRemoving ? '제거' : '표시'}했습니다.`,
     )
     setSelectedCueId(markTargets[0].cueId)
+  }
+
+  function annotatePreviewSelection(event: MouseEvent<HTMLDivElement>) {
+    if (!isEditorNotesStep) {
+      return
+    }
+
+    const selectedText = window.getSelection()?.toString().trim() ?? ''
+    const annotationTargets = createPartMarkTargetsFromViewerSelection(
+      event.currentTarget,
+    )
+    if (annotationTargets.length === 0) {
+      return
+    }
+
+    viewerSelectionHandledRef.current = true
+    window.setTimeout(() => {
+      viewerSelectionHandledRef.current = false
+    }, 0)
+
+    if (!selectedPart) {
+      setStatusMessage('주석을 추가할 part가 없습니다.')
+      clearTextSelection()
+      return
+    }
+
+    setPendingPreviewAnnotation({
+      partId: selectedPart.id,
+      targets: annotationTargets,
+      selectedText,
+      note: '',
+    })
+    setSelectedCueId(annotationTargets[0].cueId)
+    setViewerFocusedPartId(selectedPart.id)
+    setStatusMessage(`${selectedPart.name} 주석 범위를 선택했습니다.`)
+    clearTextSelection()
+  }
+
+  function updatePendingPreviewAnnotationNote(note: string) {
+    setPendingPreviewAnnotation((currentAnnotation) =>
+      currentAnnotation ? { ...currentAnnotation, note } : currentAnnotation,
+    )
+  }
+
+  function closePreviewAnnotationDialog() {
+    setPendingPreviewAnnotation(null)
+  }
+
+  function savePendingPreviewAnnotation() {
+    if (!pendingPreviewAnnotation) {
+      return
+    }
+
+    const part = project.parts.find(
+      (item) => item.id === pendingPreviewAnnotation.partId,
+    )
+    if (!part) {
+      setStatusMessage('주석을 추가할 part가 없습니다.')
+      setPendingPreviewAnnotation(null)
+      return
+    }
+
+    const note = pendingPreviewAnnotation.note.trim()
+    if (note.length === 0) {
+      setStatusMessage('Notes 주석 내용을 입력하세요.')
+      return
+    }
+
+    const nextProject = pendingPreviewAnnotation.targets.reduce(
+      (currentProject, target) =>
+        upsertPartMarkAnnotation(currentProject, {
+          cueId: target.cueId,
+          segmentId: target.segmentId,
+          partId: part.id,
+          startChar: target.startChar,
+          endChar: target.endChar,
+          note,
+        }),
+      project,
+    )
+    if (nextProject === project) {
+      setPendingPreviewAnnotation(null)
+      return
+    }
+
+    commitLaneEditorProject(
+      nextProject,
+      `${part.name} 주석 ${pendingPreviewAnnotation.targets.length}개를 저장했습니다.`,
+    )
+    setSelectedCueId(pendingPreviewAnnotation.targets[0].cueId)
+    setViewerFocusedPartId(part.id)
+    setPendingPreviewAnnotation(null)
   }
 
   function extractLyricsSource() {
@@ -1539,11 +1680,26 @@ export function HomePage() {
   function toggleViewerPartFocus(part: Part) {
     const shouldClearFocus = effectiveViewerFocusedPartId === part.id
     setViewerFocusedPartId(shouldClearFocus ? null : part.id)
+    if (
+      isEditorMode &&
+      (editorWizardStep === 'notes' || editorWizardStep === 'preview')
+    ) {
+      setSelectedPartId(part.id)
+    }
     setStatusMessage(
       shouldClearFocus
         ? 'Viewer Part 강조를 해제했습니다.'
         : `${part.name} Part만 강조합니다.`,
     )
+  }
+
+  function handleViewerCueClick(cue: LyricCue) {
+    if (viewerSelectionHandledRef.current) {
+      viewerSelectionHandledRef.current = false
+      return
+    }
+
+    void playViewerCue(cue)
   }
 
   async function playViewerCue(cue: LyricCue) {
@@ -1648,6 +1804,10 @@ export function HomePage() {
       return
     }
 
+    if (isEditorNotesStep) {
+      return
+    }
+
     if (event.code === 'Space') {
       event.preventDefault()
       if (isAudioPlaying) {
@@ -1727,6 +1887,7 @@ export function HomePage() {
       return
     }
 
+    setPendingPreviewAnnotation(null)
     setProjectFileBusyMessage('프로젝트 파일을 여는 중입니다.')
     setIsProjectFileBusy(true)
 
@@ -1830,7 +1991,7 @@ export function HomePage() {
     : 'workspace-grid practice-grid'
   const appContentClassName = [
     'app-content',
-    isProjectFileBusy ? 'app-content-busy' : '',
+    isProjectFileBusy || pendingPreviewAnnotation ? 'app-content-busy' : '',
     isWorkspaceSidebarOpen ? 'app-content-sidebar-open' : '',
   ]
     .filter(Boolean)
@@ -1896,7 +2057,10 @@ export function HomePage() {
 
   return (
     <main className="app-shell">
-      <div className={appContentClassName} aria-hidden={isProjectFileBusy}>
+      <div
+        className={appContentClassName}
+        aria-hidden={isProjectFileBusy || Boolean(pendingPreviewAnnotation)}
+      >
         <header className="workspace-header">
           <div className="workspace-title-stack">
             <p className="app-kicker">Eazy Chorus</p>
@@ -2999,7 +3163,7 @@ export function HomePage() {
             </>
           ) : null}
 
-          {!isEditorMode || editorWizardStep === 'preview' ? (
+          {isViewerSurfaceVisible ? (
             <section
               className="workspace-section viewer-mode-section"
               aria-labelledby="viewer-mode-title"
@@ -3008,10 +3172,17 @@ export function HomePage() {
               onTouchMove={handleViewerManualScroll}
             >
               <div className="section-heading">
-                <h2 id="viewer-mode-title">Viewer Mode</h2>
+                <h2 id="viewer-mode-title">
+                  {isEditorNotesStep ? 'Notes' : 'Viewer Mode'}
+                </h2>
                 <span>
-                  {timelineCues.length} cue / auto-scroll{' '}
-                  {isAutoScrollPaused ? 'paused' : 'on'}
+                  {isEditorNotesStep
+                    ? `${selectedPartAnnotations.length} note / ${
+                        selectedPart?.name ?? 'Part'
+                      }`
+                    : `${timelineCues.length} cue / auto-scroll ${
+                        isAutoScrollPaused ? 'paused' : 'on'
+                      }`}
                 </span>
               </div>
 
@@ -3022,6 +3193,7 @@ export function HomePage() {
                     className="viewer-lyrics-stage"
                     aria-label="viewer lyrics document"
                     tabIndex={0}
+                    onMouseUp={annotatePreviewSelection}
                   >
                     {timelineCues.map((cue) => {
                       const isViewerCuePartFocused = isCueFocusedByViewerPart({
@@ -3032,20 +3204,13 @@ export function HomePage() {
                         partMarks: project.partMarks,
                       })
 
-                      return (
-                        <button
-                          ref={(element) => {
-                            viewerCueRefs.current[cue.id] = element
-                          }}
-                          className={createViewerCueClassName({
-                            isActive: activeCueIds.has(cue.id),
-                            isPartFocusEnabled: viewerPartFocusMode !== 'all',
-                            isPartFocused: isViewerCuePartFocused,
-                          })}
-                          type="button"
-                          key={cue.id}
-                          onClick={() => void playViewerCue(cue)}
-                        >
+                      const cueClassName = createViewerCueClassName({
+                        isActive: activeCueIds.has(cue.id),
+                        isPartFocusEnabled: viewerPartFocusMode !== 'all',
+                        isPartFocused: isViewerCuePartFocused,
+                      })
+                      const cueContent = (
+                        <>
                           <span className="viewer-cue-range">
                             {formatCueRange(cue)}
                           </span>
@@ -3057,6 +3222,30 @@ export function HomePage() {
                             parts={project.parts}
                             partMarks={project.partMarks}
                           />
+                        </>
+                      )
+
+                      return isEditorNotesStep ? (
+                        <div
+                          ref={(element) => {
+                            viewerCueRefs.current[cue.id] = element
+                          }}
+                          className={`${cueClassName} viewer-cue-note-target`}
+                          key={cue.id}
+                        >
+                          {cueContent}
+                        </div>
+                      ) : (
+                        <button
+                          ref={(element) => {
+                            viewerCueRefs.current[cue.id] = element
+                          }}
+                          className={cueClassName}
+                          type="button"
+                          key={cue.id}
+                          onClick={() => handleViewerCueClick(cue)}
+                        >
+                          {cueContent}
                         </button>
                       )
                     })}
@@ -3077,9 +3266,40 @@ export function HomePage() {
                 </div>
 
                 <aside
-                  className="viewer-side-panel"
+                  className={
+                    isEditorNotesStep
+                      ? 'viewer-side-panel viewer-side-panel-notes'
+                      : 'viewer-side-panel'
+                  }
                   aria-label="viewer side panel"
                 >
+                  {isEditorNotesStep ? (
+                    <div
+                      className="preview-annotation-panel"
+                      aria-label="notes annotation editor"
+                    >
+                      <div className="panel-title-row">
+                        <h3>Part Notes</h3>
+                        <span>{selectedPart?.name ?? 'Part'} 선택 중</span>
+                      </div>
+                      {selectedPartAnnotations.length > 0 ? (
+                        <ul
+                          className="preview-annotation-list"
+                          aria-label="선택 Part 주석 목록"
+                        >
+                          {selectedPartAnnotations.map((mark) => (
+                            <li key={mark.id}>
+                              <strong>
+                                {formatPartMarkAnnotationSource(mark, project)}
+                              </strong>
+                              <span>{mark.note}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   <div className="viewer-panel-tabs">
                     <button
                       type="button"
@@ -3105,11 +3325,16 @@ export function HomePage() {
                             track.role === 'part-audio' &&
                             track.partId === part.id,
                         )
+                        const isPreviewAnnotationPart =
+                          isEditorMode &&
+                          editorWizardStep === 'notes' &&
+                          selectedPart?.id === part.id
 
                         return (
                           <article
                             className={
-                              effectiveViewerFocusedPartId === part.id
+                              effectiveViewerFocusedPartId === part.id ||
+                              isPreviewAnnotationPart
                                 ? 'viewer-part-item viewer-part-item-selected'
                                 : 'viewer-part-item'
                             }
@@ -3633,6 +3858,48 @@ export function HomePage() {
           </div>
         ) : null}
       </aside>
+      {pendingPreviewAnnotation ? (
+        <div
+          className="preview-annotation-dialog-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="preview-annotation-dialog-title"
+        >
+          <form
+            className="preview-annotation-dialog"
+            onSubmit={(event) => {
+              event.preventDefault()
+              savePendingPreviewAnnotation()
+            }}
+          >
+            <div className="panel-title-row">
+              <h2 id="preview-annotation-dialog-title">Part Note</h2>
+              <span>{pendingPreviewAnnotationPart?.name ?? 'Part'}</span>
+            </div>
+            <p className="preview-annotation-target">
+              {pendingPreviewAnnotation.selectedText}
+            </p>
+            <label>
+              주석
+              <textarea
+                ref={previewAnnotationTextareaRef}
+                aria-label="Notes 주석 입력"
+                rows={4}
+                value={pendingPreviewAnnotation.note}
+                onChange={(event) =>
+                  updatePendingPreviewAnnotationNote(event.target.value)
+                }
+              />
+            </label>
+            <div className="preview-annotation-dialog-actions">
+              <button type="button" onClick={closePreviewAnnotationDialog}>
+                취소
+              </button>
+              <button type="submit">저장</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       {isProjectFileBusy ? (
         <div
           className="project-file-loading-overlay"
@@ -3702,9 +3969,11 @@ function ViewerCueText({
         const visibleSegmentMarks = focusedPartId
           ? segmentMarks.filter((mark) => mark.partId === focusedPartId)
           : segmentMarks
+        const visualSegmentMarks = visibleSegmentMarks.filter(isVisualPartMark)
+        const noteSegmentMarks = visibleSegmentMarks.filter(hasPartMarkNote)
         const fragments = splitSegmentTextByPartMarks(
           segment,
-          visibleSegmentMarks,
+          visualSegmentMarks,
         )
 
         return (
@@ -3720,10 +3989,13 @@ function ViewerCueText({
             ) : null}
             {fragments.map((fragment) => (
               <PartMarkFragment
+                cueId={cue.id}
                 fragment={fragment}
                 focusedPartId={focusedPartId}
                 key={`${segment.id}-${fragment.startChar}-${fragment.endChar}`}
+                noteMarks={noteSegmentMarks}
                 parts={parts}
+                segmentId={segment.id}
               />
             ))}
           </span>
@@ -3790,55 +4062,140 @@ function isCueFocusedByViewerPart({
   }
 
   return partMarks.some(
-    (mark) => mark.cueId === cue.id && mark.partId === focusedPartId,
+    (mark) =>
+      isVisualPartMark(mark) &&
+      mark.cueId === cue.id &&
+      mark.partId === focusedPartId,
   )
 }
 
+type PartMarkBodyFragment = {
+  endChar: number
+  noteMarks: PartMark[]
+  startChar: number
+  text: string
+}
+
 function PartMarkFragment({
+  cueId,
   focusedPartId,
   fragment,
+  noteMarks,
   parts,
+  segmentId,
 }: {
+  cueId: string
   focusedPartId: string | null
   fragment: PartMarkTextFragment
+  noteMarks: readonly PartMark[]
   parts: readonly Part[]
+  segmentId: string
 }) {
+  const fragmentNoteMarks = noteMarks.filter((mark) =>
+    rangesOverlap(mark, fragment),
+  )
+  const visualMarks = fragment.marks.filter(isVisualPartMark)
   const isFocusedPartFragment =
     focusedPartId !== null &&
-    fragment.marks.some((mark) => mark.partId === focusedPartId)
+    visualMarks.some((mark) => mark.partId === focusedPartId)
   const lineAboveMarks = getPartMarksForLineStack(
-    fragment.marks,
+    visualMarks,
     parts,
     'line-above',
   )
   const lineBelowMarks = getPartMarksForLineStack(
-    fragment.marks,
+    visualMarks,
     parts,
     'line-below',
+  )
+  const bodyFragments = splitPartMarkFragmentByNotes(
+    fragment,
+    fragmentNoteMarks,
   )
 
   return (
     <span
       className={[
         'part-mark-fragment',
-        fragment.marks.length > 0 ? 'part-mark-fragment-marked' : '',
+        visualMarks.length > 0 ? 'part-mark-fragment-marked' : '',
         isFocusedPartFragment ? 'part-mark-fragment-focused' : '',
+        fragmentNoteMarks.length > 0 ? 'part-mark-fragment-has-note' : '',
       ]
         .filter(Boolean)
         .join(' ')}
       style={createPartMarkFragmentStyle(
-        fragment.marks,
+        visualMarks,
         parts,
         isFocusedPartFragment ? focusedPartId : null,
       )}
-      title={formatPartMarkTitle(fragment.marks, parts)}
+      title={
+        fragmentNoteMarks.length > 0
+          ? undefined
+          : formatPartMarkTitle(visualMarks, parts)
+      }
     >
       <PartMarkLineStack
         marks={lineAboveMarks}
         parts={parts}
         position="above"
       />
-      <span className="part-mark-fragment-text">{fragment.text}</span>
+      <span className="part-mark-fragment-body">
+        {bodyFragments.map((bodyFragment) => (
+          <span
+            className={[
+              'part-mark-body-piece',
+              bodyFragment.noteMarks.length > 0
+                ? 'part-mark-body-piece-has-note'
+                : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            key={`${bodyFragment.startChar}-${bodyFragment.endChar}`}
+          >
+            <span
+              className="part-mark-fragment-text"
+              data-cue-id={cueId}
+              data-end-char={bodyFragment.endChar}
+              data-part-mark-text="true"
+              data-segment-id={segmentId}
+              data-start-char={bodyFragment.startChar}
+            >
+              {bodyFragment.text}
+            </span>
+            {bodyFragment.noteMarks.length > 0 ? (
+              <span
+                className="part-mark-note-indicators"
+                aria-label={formatPartMarkNoteSummary(
+                  bodyFragment.noteMarks,
+                  parts,
+                )}
+              >
+                {bodyFragment.noteMarks.map((mark) => (
+                  <span
+                    className="part-mark-note-indicator"
+                    key={`note-indicator-${mark.id}`}
+                    style={createPartNoteIndicatorStyle(mark, parts)}
+                    aria-hidden="true"
+                  />
+                ))}
+              </span>
+            ) : null}
+            {bodyFragment.noteMarks.length > 0 ? (
+              <span className="part-mark-note-tooltip" role="tooltip">
+                {bodyFragment.noteMarks.map((mark) => (
+                  <span
+                    className="part-mark-note"
+                    key={`note-${mark.id}`}
+                    title={formatPartMarkLabel(mark, parts)}
+                  >
+                    {formatPartMarkNote(mark, parts)}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+          </span>
+        ))}
+      </span>
       <PartMarkLineStack
         marks={lineBelowMarks}
         parts={parts}
@@ -3846,6 +4203,43 @@ function PartMarkFragment({
       />
     </span>
   )
+}
+
+function splitPartMarkFragmentByNotes(
+  fragment: PartMarkTextFragment,
+  noteMarks: readonly PartMark[],
+): PartMarkBodyFragment[] {
+  const overlappingNoteMarks = noteMarks.filter((mark) =>
+    rangesOverlap(mark, fragment),
+  )
+  const boundaries = new Set<number>([fragment.startChar, fragment.endChar])
+  overlappingNoteMarks.forEach((mark) => {
+    boundaries.add(Math.max(fragment.startChar, mark.startChar))
+    boundaries.add(Math.min(fragment.endChar, mark.endChar))
+  })
+
+  const sortedBoundaries = [...boundaries].sort(
+    (first, second) => first - second,
+  )
+
+  return sortedBoundaries.flatMap((startChar, index) => {
+    const endChar = sortedBoundaries[index + 1]
+    if (endChar === undefined || startChar === endChar) {
+      return []
+    }
+
+    const localStartChar = startChar - fragment.startChar
+    const localEndChar = endChar - fragment.startChar
+
+    return {
+      endChar,
+      noteMarks: overlappingNoteMarks.filter(
+        (mark) => mark.startChar <= startChar && endChar <= mark.endChar,
+      ),
+      startChar,
+      text: fragment.text.slice(localStartChar, localEndChar),
+    }
+  })
 }
 
 function PartMarkLineStack({
@@ -3970,6 +4364,7 @@ type PartMarkDocumentHighlight = LyricCueSourceRange & {
   segmentId: string
   partId: string
   style: PartMark['style']
+  note?: string
 }
 
 type HarmonyDocumentFragment = {
@@ -4145,6 +4540,109 @@ function createPartMarkTargetsFromDocumentSelection({
   })
 }
 
+function createPartMarkTargetsFromViewerSelection(
+  root: HTMLElement,
+): PartMarkDocumentTarget[] {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return []
+  }
+
+  const selectionRange = selection.getRangeAt(0)
+  if (
+    !root.contains(selectionRange.startContainer) &&
+    !root.contains(selectionRange.endContainer)
+  ) {
+    return []
+  }
+
+  const targets = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-part-mark-text="true"]'),
+  ).flatMap((element) => {
+    if (!rangeIntersectsElement(selectionRange, element)) {
+      return []
+    }
+
+    const cueId = element.dataset.cueId
+    const segmentId = element.dataset.segmentId
+    const baseStartChar = Number(element.dataset.startChar)
+    const baseEndChar = Number(element.dataset.endChar)
+    const text = element.textContent ?? ''
+    if (
+      !cueId ||
+      !segmentId ||
+      !Number.isFinite(baseStartChar) ||
+      !Number.isFinite(baseEndChar) ||
+      baseEndChar < baseStartChar
+    ) {
+      return []
+    }
+
+    const localStartChar = element.contains(selectionRange.startContainer)
+      ? getSelectionTextLengthBefore(element, {
+          node: selectionRange.startContainer,
+          offset: selectionRange.startOffset,
+        })
+      : 0
+    const localEndChar = element.contains(selectionRange.endContainer)
+      ? getSelectionTextLengthBefore(element, {
+          node: selectionRange.endContainer,
+          offset: selectionRange.endOffset,
+        })
+      : text.length
+    const localRange = trimTextSelectionRange(text, {
+      startChar: localStartChar,
+      endChar: localEndChar,
+    })
+    if (!localRange) {
+      return []
+    }
+
+    return {
+      cueId,
+      segmentId,
+      startChar: baseStartChar + localRange.startChar,
+      endChar: baseStartChar + localRange.endChar,
+    }
+  })
+
+  return mergeAdjacentPartMarkTargets(targets)
+}
+
+function mergeAdjacentPartMarkTargets(
+  targets: readonly PartMarkDocumentTarget[],
+): PartMarkDocumentTarget[] {
+  return targets.reduce<PartMarkDocumentTarget[]>((mergedTargets, target) => {
+    const previousTarget = mergedTargets.at(-1)
+    if (
+      previousTarget &&
+      previousTarget.cueId === target.cueId &&
+      previousTarget.segmentId === target.segmentId &&
+      previousTarget.endChar >= target.startChar
+    ) {
+      previousTarget.endChar = Math.max(previousTarget.endChar, target.endChar)
+      return mergedTargets
+    }
+
+    mergedTargets.push({ ...target })
+    return mergedTargets
+  }, [])
+}
+
+function rangeIntersectsElement(range: Range, element: HTMLElement): boolean {
+  if (typeof range.intersectsNode === 'function') {
+    return range.intersectsNode(element)
+  }
+
+  const elementRange = document.createRange()
+  elementRange.selectNodeContents(element)
+
+  return (
+    range.compareBoundaryPoints(Range.END_TO_START, elementRange) > 0 &&
+    range.compareBoundaryPoints(Range.START_TO_END, elementRange) < 0
+  )
+}
+
 function findMatchingLaneHighlights({
   highlights,
   laneId,
@@ -4279,6 +4777,7 @@ function createPartMarkDocumentHighlights({
       return partMarks
         .filter(
           (mark) =>
+            isVisualPartMark(mark) &&
             mark.cueId === cue.id &&
             mark.segmentId === segment.id &&
             mark.startChar >= 0 &&
@@ -4292,6 +4791,7 @@ function createPartMarkDocumentHighlights({
           segmentId: mark.segmentId,
           partId: mark.partId,
           style: mark.style,
+          ...(hasPartMarkNote(mark) ? { note: mark.note.trim() } : {}),
           startChar: segmentRange.startChar + mark.startChar,
           endChar: segmentRange.startChar + mark.endChar,
         }))
@@ -4518,6 +5018,10 @@ function getSelectionTextLengthBefore(
   return range.toString().length
 }
 
+function clearTextSelection() {
+  window.getSelection()?.removeAllRanges()
+}
+
 function createExistingMediaPathSet(project: EazyChorusProject): Set<string> {
   return new Set(project.media.map((track) => track.path))
 }
@@ -4581,9 +5085,14 @@ function formatPartMarkDocumentTitle(
   parts: readonly Part[],
 ): string {
   return highlights
-    .map(
-      (highlight) => parts.find((part) => part.id === highlight.partId)?.name,
-    )
+    .map((highlight) => {
+      const partName = parts.find((part) => part.id === highlight.partId)?.name
+      if (!partName) {
+        return null
+      }
+
+      return highlight.note ? `${partName}: ${highlight.note}` : partName
+    })
     .filter((partName): partName is string => Boolean(partName))
     .join(', ')
 }
@@ -4668,11 +5177,56 @@ function normalizeHarmonyLevelInput(value: number): number {
   )
 }
 
+function hasPartMarkNote(mark: PartMark): mark is PartMark & { note: string } {
+  return typeof mark.note === 'string' && mark.note.trim().length > 0
+}
+
+function isVisualPartMark(mark: PartMark): boolean {
+  return !hasPartMarkNote(mark)
+}
+
+function formatPartMarkNote(mark: PartMark, parts: readonly Part[]): string {
+  const partName =
+    parts.find((part) => part.id === mark.partId)?.name ?? mark.partId
+
+  return `${partName}: ${mark.note?.trim() ?? ''}`
+}
+
+function formatPartMarkNoteSummary(
+  marks: readonly PartMark[],
+  parts: readonly Part[],
+): string {
+  return marks.map((mark) => formatPartMarkNote(mark, parts)).join(', ')
+}
+
+function createPartNoteIndicatorStyle(
+  mark: PartMark,
+  parts: readonly Part[],
+): CSSProperties {
+  return {
+    '--part-note-color': getPartColor(mark.partId, parts),
+  } as CSSProperties
+}
+
+function formatPartMarkAnnotationSource(
+  mark: PartMark,
+  project: EazyChorusProject,
+): string {
+  const cue = project.cues.find((item) => item.id === mark.cueId)
+  const segment = cue?.segments.find((item) => item.id === mark.segmentId)
+  const text = segment?.text.slice(mark.startChar, mark.endChar).trim()
+
+  return text || `${mark.startChar}-${mark.endChar}`
+}
+
 function formatPartMarkLabel(mark: PartMark, parts: readonly Part[]): string {
   const partName =
     parts.find((part) => part.id === mark.partId)?.name ?? mark.partId
 
-  return `${partName} ${mark.startChar}-${mark.endChar}`
+  const rangeLabel = `${partName} ${mark.startChar}-${mark.endChar}`
+  return hasPartMarkNote(mark)
+    ? `${rangeLabel}: ${mark.note.trim()}`
+    : rangeLabel
 }
 
 function formatPartMarkTitle(
