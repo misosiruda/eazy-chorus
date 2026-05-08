@@ -2,6 +2,7 @@ node_modules
 dist
 coverage
 .vite
+.vite-dev.*.log
 .DS_Store
 *.local
 npm-debug.log*
