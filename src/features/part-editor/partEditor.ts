@@ -26,6 +26,10 @@ type PartMarkToggleOptions = {
   endChar: number
 }
 
+type PartMarkAnnotationOptions = PartMarkToggleOptions & {
+  note: string
+}
+
 type TextRange = {
   startChar: number
   endChar: number
@@ -75,6 +79,7 @@ export function togglePartMark(
 
   const existingMark = project.partMarks.find(
     (mark) =>
+      isVisualPartMark(mark) &&
       mark.cueId === cueId &&
       mark.segmentId === segmentId &&
       mark.partId === partId &&
@@ -96,13 +101,85 @@ export function togglePartMark(
     partMarks: [
       ...project.partMarks,
       {
-        id: createPartMarkId(cueId, segmentId, partId, textRange),
+        id: createUniquePartMarkId(
+          project.partMarks,
+          createPartMarkId(cueId, segmentId, partId, textRange),
+          'mark',
+        ),
         cueId,
         segmentId,
         partId,
         startChar: textRange.startChar,
         endChar: textRange.endChar,
         style: part.defaultMarkStyle,
+      },
+    ],
+  }
+}
+
+export function upsertPartMarkAnnotation(
+  project: EazyChorusProject,
+  {
+    cueId,
+    segmentId,
+    partId,
+    startChar,
+    endChar,
+    note,
+  }: PartMarkAnnotationOptions,
+): EazyChorusProject {
+  const part = project.parts.find((item) => item.id === partId)
+  const segment = findCueSegment(project, cueId, segmentId)
+  const normalizedNote = note.trim()
+  if (!part || !segment || normalizedNote.length === 0) {
+    return project
+  }
+
+  const textRange = normalizeTextRange(segment.text.length, startChar, endChar)
+  if (!textRange) {
+    return project
+  }
+
+  const existingMark = project.partMarks.find(
+    (mark) =>
+      isAnnotationPartMark(mark) &&
+      mark.cueId === cueId &&
+      mark.segmentId === segmentId &&
+      mark.partId === partId &&
+      mark.startChar === textRange.startChar &&
+      mark.endChar === textRange.endChar,
+  )
+
+  if (existingMark) {
+    if (existingMark.note === normalizedNote) {
+      return project
+    }
+
+    return {
+      ...project,
+      partMarks: project.partMarks.map((mark) =>
+        mark.id === existingMark.id ? { ...mark, note: normalizedNote } : mark,
+      ),
+    }
+  }
+
+  return {
+    ...project,
+    partMarks: [
+      ...project.partMarks,
+      {
+        id: createUniquePartMarkId(
+          project.partMarks,
+          createPartMarkAnnotationId(cueId, segmentId, partId, textRange),
+          'note',
+        ),
+        cueId,
+        segmentId,
+        partId,
+        startChar: textRange.startChar,
+        endChar: textRange.endChar,
+        style: part.defaultMarkStyle,
+        note: normalizedNote,
       },
     ],
   }
@@ -207,6 +284,42 @@ function createPartMarkId(
     range.startChar,
     range.endChar,
   ].join('-')
+}
+
+function createPartMarkAnnotationId(
+  cueId: string,
+  segmentId: string,
+  partId: string,
+  range: TextRange,
+): string {
+  return `${createPartMarkId(cueId, segmentId, partId, range)}-note`
+}
+
+function createUniquePartMarkId(
+  marks: readonly PartMark[],
+  candidateId: string,
+  suffix: string,
+): string {
+  if (!marks.some((mark) => mark.id === candidateId)) {
+    return candidateId
+  }
+
+  let index = 2
+  let nextId = `${candidateId}-${suffix}`
+  while (marks.some((mark) => mark.id === nextId)) {
+    nextId = `${candidateId}-${suffix}-${index}`
+    index += 1
+  }
+
+  return nextId
+}
+
+function isAnnotationPartMark(mark: PartMark): boolean {
+  return typeof mark.note === 'string' && mark.note.trim().length > 0
+}
+
+function isVisualPartMark(mark: PartMark): boolean {
+  return !isAnnotationPartMark(mark)
 }
 
 function slugify(value: string): string {

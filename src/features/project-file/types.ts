@@ -103,6 +103,7 @@ export type PartMark = {
   startChar: number
   endChar: number
   style: MarkStyle
+  note?: string
 }
 
 export type LyricDraftLine = {

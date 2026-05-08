@@ -90,6 +90,7 @@ describe('project-file feature', () => {
         startChar: 0,
         endChar: 5,
         style: 'highlight',
+        note: '첫 호흡을 짧게',
       },
     ])
     expect(imported.package?.project.media).toHaveLength(2)
@@ -237,6 +238,7 @@ function createProjectPackageFixture(): {
         startChar: 0,
         endChar: 5,
         style: 'highlight',
+        note: '첫 호흡을 짧게',
       },
     ],
   }

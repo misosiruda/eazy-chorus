@@ -2,6 +2,7 @@ import { createNewProject } from '../project-file'
 import {
   splitSegmentTextByPartMarks,
   togglePartMark,
+  upsertPartMarkAnnotation,
   updateCueSegmentRole,
 } from './partEditor'
 
@@ -71,6 +72,88 @@ describe('part-editor feature', () => {
       { text: '첫번', markCount: 0 },
       { text: '째 가', markCount: 1 },
       { text: '사', markCount: 0 },
+    ])
+  })
+
+  it('adds and updates a note on a selected Part Mark range', () => {
+    const project = createProjectWithCue()
+
+    const annotatedProject = upsertPartMarkAnnotation(project, {
+      cueId: 'cue-1',
+      segmentId: 'seg-1',
+      partId: 'main-vocal',
+      startChar: 0,
+      endChar: 3,
+      note: '첫 호흡을 짧게',
+    })
+    const updatedProject = upsertPartMarkAnnotation(annotatedProject, {
+      cueId: 'cue-1',
+      segmentId: 'seg-1',
+      partId: 'main-vocal',
+      startChar: 0,
+      endChar: 3,
+      note: '첫 호흡을 길게',
+    })
+
+    expect(annotatedProject.partMarks).toEqual([
+      expect.objectContaining({
+        cueId: 'cue-1',
+        segmentId: 'seg-1',
+        partId: 'main-vocal',
+        startChar: 0,
+        endChar: 3,
+        note: '첫 호흡을 짧게',
+      }),
+    ])
+    expect(updatedProject.partMarks).toHaveLength(1)
+    expect(updatedProject.partMarks[0]).toEqual(
+      expect.objectContaining({
+        note: '첫 호흡을 길게',
+      }),
+    )
+  })
+
+  it('keeps annotation marks separate from visual Part Mark toggles', () => {
+    const project = createProjectWithCue()
+
+    const annotatedProject = upsertPartMarkAnnotation(project, {
+      cueId: 'cue-1',
+      segmentId: 'seg-1',
+      partId: 'main-vocal',
+      startChar: 0,
+      endChar: 3,
+      note: '첫 호흡을 짧게',
+    })
+    const markedProject = togglePartMark(annotatedProject, {
+      cueId: 'cue-1',
+      segmentId: 'seg-1',
+      partId: 'main-vocal',
+      startChar: 0,
+      endChar: 3,
+    })
+    const unmarkedProject = togglePartMark(markedProject, {
+      cueId: 'cue-1',
+      segmentId: 'seg-1',
+      partId: 'main-vocal',
+      startChar: 0,
+      endChar: 3,
+    })
+
+    expect(markedProject.partMarks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          note: '첫 호흡을 짧게',
+        }),
+        expect.not.objectContaining({
+          note: expect.any(String),
+        }),
+      ]),
+    )
+    expect(markedProject.partMarks).toHaveLength(2)
+    expect(unmarkedProject.partMarks).toEqual([
+      expect.objectContaining({
+        note: '첫 호흡을 짧게',
+      }),
     ])
   })
 })
