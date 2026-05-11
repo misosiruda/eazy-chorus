@@ -2,7 +2,9 @@ import {
   EAZY_CHORUS_APP_ID,
   type EazyChorusProject,
   PROJECT_SCHEMA_VERSION,
+  SUPPORTED_PROJECT_SCHEMA_VERSIONS,
 } from './types'
+import { migrateLegacyLyricSources } from './lyricSources'
 
 export type ValidationIssue = {
   severity: 'error' | 'warning'
@@ -59,9 +61,15 @@ export function validateProjectPayload(
 
   const mediaIds = validateMedia(mediaItems, mediaPaths, issues)
   const partIds = validateParts(partItems, mediaIds, issues)
-  validateLyricDraft(lyricDraftItems, issues)
+  const draftLineTextById = validateLyricDraft(lyricDraftItems, issues)
   const laneIds = validateLanes(laneItems, partIds, issues)
-  const segmentTexts = validateCues(cueItems, laneIds, partIds, issues)
+  const segmentTexts = validateCues(
+    cueItems,
+    laneIds,
+    partIds,
+    draftLineTextById,
+    issues,
+  )
 
   validateMediaPartReferences(mediaItems, partIds, issues)
   validatePartMarks(markItems, partIds, segmentTexts, issues)
@@ -89,11 +97,17 @@ function validateRoot(
   root: Record<string, unknown>,
   issues: ValidationIssue[],
 ): void {
-  if (root.schemaVersion !== PROJECT_SCHEMA_VERSION) {
+  if (
+    !SUPPORTED_PROJECT_SCHEMA_VERSIONS.includes(
+      root.schemaVersion as (typeof SUPPORTED_PROJECT_SCHEMA_VERSIONS)[number],
+    )
+  ) {
     addError(
       issues,
       'schemaVersion',
-      `schemaVersion은 ${PROJECT_SCHEMA_VERSION}이어야 합니다.`,
+      `schemaVersion은 ${SUPPORTED_PROJECT_SCHEMA_VERSIONS.join(
+        ', ',
+      )} 중 하나여야 합니다.`,
     )
   }
 
@@ -335,8 +349,9 @@ function validateLanes(
 function validateLyricDraft(
   draftItems: readonly unknown[],
   issues: ValidationIssue[],
-): void {
+): Map<string, string> {
   const draftIds = new Set<string>()
+  const draftLineTextById = new Map<string, string>()
 
   draftItems.forEach((item, index) => {
     const pathPrefix = `lyricDraft[${index}]`
@@ -362,13 +377,19 @@ function validateLyricDraft(
         'draft text는 비어 있을 수 없습니다.',
       )
     }
+    if (id && text !== undefined) {
+      draftLineTextById.set(id, text)
+    }
   })
+
+  return draftLineTextById
 }
 
 function validateCues(
   cueItems: readonly unknown[],
   laneIds: ReadonlySet<string>,
   partIds: ReadonlySet<string>,
+  draftLineTextById: ReadonlyMap<string, string>,
   issues: ValidationIssue[],
 ): Map<string, string> {
   const cueIds = new Set<string>()
@@ -444,6 +465,12 @@ function validateCues(
         }
         segmentTexts.set(segmentKey, text)
       }
+      validateLyricSegmentSource(
+        segment.source,
+        `${segmentPath}.source`,
+        draftLineTextById,
+        issues,
+      )
 
       const segmentPartIds = readArray(
         segment.partIds,
@@ -468,6 +495,62 @@ function validateCues(
   })
 
   return segmentTexts
+}
+
+function validateLyricSegmentSource(
+  value: unknown,
+  pathPrefix: string,
+  draftLineTextById: ReadonlyMap<string, string>,
+  issues: ValidationIssue[],
+): void {
+  if (value === undefined) {
+    return
+  }
+
+  const source = asRecord(value)
+  if (!source) {
+    addError(issues, pathPrefix, 'segment source는 객체여야 합니다.')
+    return
+  }
+
+  const draftLineId = requireString(
+    source.draftLineId,
+    `${pathPrefix}.draftLineId`,
+    issues,
+  )
+  const startChar = requireNumber(
+    source.startChar,
+    `${pathPrefix}.startChar`,
+    issues,
+  )
+  const endChar = requireNumber(source.endChar, `${pathPrefix}.endChar`, issues)
+  optionalBoolean(source.wholeLine, `${pathPrefix}.wholeLine`, issues)
+
+  if (!draftLineId) {
+    return
+  }
+
+  const draftLineText = draftLineTextById.get(draftLineId)
+  if (draftLineText === undefined) {
+    addError(
+      issues,
+      `${pathPrefix}.draftLineId`,
+      `존재하지 않는 lyric draft id입니다: ${draftLineId}`,
+    )
+    return
+  }
+
+  if (
+    startChar !== undefined &&
+    endChar !== undefined &&
+    (startChar < 0 || endChar <= startChar || endChar > draftLineText.length)
+  ) {
+    addError(
+      issues,
+      pathPrefix,
+      'segment source 범위는 lyric draft line 길이 안의 startChar < endChar 값이어야 합니다.',
+    )
+  }
 }
 
 function validateMediaPartReferences(
@@ -699,6 +782,18 @@ function requireBoolean(
   }
 }
 
+function optionalBoolean(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+): void {
+  if (value === undefined) {
+    return
+  }
+
+  requireBoolean(value, path, issues)
+}
+
 function requireEnum<T extends string>(
   value: unknown,
   allowed: readonly T[],
@@ -740,8 +835,9 @@ function normalizeProjectPayload(
   project: EazyChorusProject,
   root: Record<string, unknown>,
 ): EazyChorusProject {
-  return {
+  return migrateLegacyLyricSources({
     ...project,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
     parts: project.parts.map((part) => ({
       ...part,
       harmonyLevel: normalizeHarmonyLevel(
@@ -749,7 +845,7 @@ function normalizeProjectPayload(
       ),
     })),
     lyricDraft: Array.isArray(root.lyricDraft) ? project.lyricDraft : [],
-  }
+  })
 }
 
 function normalizeHarmonyLevel(value: unknown): number {

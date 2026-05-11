@@ -6,6 +6,8 @@ import {
   createNewProject,
   exportProjectPackage,
   importProjectPackage,
+  PROJECT_SCHEMA_VERSION,
+  syncProjectLyricSegmentTexts,
   validateProjectPayload,
   type EazyChorusProject,
   type ProjectMediaFiles,
@@ -98,6 +100,76 @@ describe('project-file feature', () => {
       'media/mr.mp3',
       'media/vocal-fx.wav',
     ])
+  })
+
+  it('migrates legacy cue text copies to lyric segment source references', () => {
+    const { project, mediaFiles } = createProjectPackageFixture()
+    const legacyProject = {
+      ...project,
+      schemaVersion: 1,
+      cues: project.cues.map((cue) => ({
+        ...cue,
+        segments: cue.segments.map((segment) => {
+          const legacySegment = { ...segment } as Record<string, unknown>
+          delete legacySegment.source
+          return legacySegment
+        }),
+      })),
+    }
+
+    const validation = validateProjectPayload(
+      legacyProject,
+      new Set(Object.keys(mediaFiles)),
+    )
+
+    expect(validation.issues).toEqual([])
+    expect(validation.project?.schemaVersion).toBe(PROJECT_SCHEMA_VERSION)
+    expect(validation.project?.cues[0].segments[0].source).toEqual({
+      draftLineId: 'lyric-draft-1',
+      startChar: 0,
+      endChar: '키미노 나오 욘다'.length,
+      wholeLine: true,
+    })
+
+    const syncedProject = syncProjectLyricSegmentTexts({
+      ...validation.project!,
+      lyricDraft: [{ id: 'lyric-draft-1', text: '키미노 이름을 불렀다' }],
+    })
+
+    expect(syncedProject.cues[0].segments[0].text).toBe(
+      '키미노 이름을 불렀다',
+    )
+  })
+
+  it('upgrades stale legacy source ranges to whole-line lyric sources', () => {
+    const { project, mediaFiles } = createProjectPackageFixture()
+    const legacyProject = {
+      ...project,
+      schemaVersion: 1,
+      lyricDraft: [{ id: 'lyric-draft-1', text: '키미노 이름을 불렀다' }],
+      cues: project.cues.map((cue) => ({
+        ...cue,
+        sourceRange: { startChar: 0, endChar: '키미노 나오 욘다'.length },
+      })),
+    }
+
+    const validation = validateProjectPayload(
+      legacyProject,
+      new Set(Object.keys(mediaFiles)),
+    )
+
+    expect(validation.issues).toEqual([])
+    expect(validation.project?.cues[0].segments[0]).toEqual(
+      expect.objectContaining({
+        text: '키미노 이름을 불렀다',
+        source: {
+          draftLineId: 'lyric-draft-1',
+          startChar: 0,
+          endChar: '키미노 이름을 불렀다'.length,
+          wholeLine: true,
+        },
+      }),
+    )
   })
 
   it('reports a validation error when project.json references missing media', async () => {
