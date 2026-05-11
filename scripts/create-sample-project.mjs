@@ -43,6 +43,11 @@ const cues = [
         role: 'main',
         text: '오래 기다린 이 밤',
         partIds: ['main-vocal'],
+        source: createDraftSource({
+          draftLineId: 'draft-001',
+          text: '오래 기다린 이 밤',
+          wholeLine: true,
+        }),
       }),
     ],
   }),
@@ -56,12 +61,21 @@ const cues = [
         role: 'main',
         text: '우리 목소리',
         partIds: ['main-vocal'],
+        source: createDraftSource({
+          draftLineId: 'draft-002',
+          text: '우리 목소리',
+        }),
       }),
       createSegment({
         id: 'seg-002-sub',
         role: 'sub',
         text: '겹쳐',
         partIds: ['upper-harmony'],
+        source: createDraftSource({
+          draftLineId: 'draft-002',
+          text: '겹쳐',
+          startChar: '우리 목소리 '.length,
+        }),
       }),
     ],
   }),
@@ -75,6 +89,11 @@ const cues = [
         role: 'main',
         text: '높이 올라가',
         partIds: ['main-vocal', 'upper-harmony'],
+        source: createDraftSource({
+          draftLineId: 'draft-003',
+          text: '높이 올라가',
+          wholeLine: true,
+        }),
       }),
     ],
   }),
@@ -88,13 +107,18 @@ const cues = [
         role: 'main',
         text: '다시 한 번 chorus',
         partIds: ['main-vocal', 'lower-harmony'],
+        source: createDraftSource({
+          draftLineId: 'draft-004',
+          text: '다시 한 번 chorus',
+          wholeLine: true,
+        }),
       }),
     ],
   }),
 ]
 
 const project = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   app: 'eazy-chorus',
   project: {
     id: 'sample-project-eazy-chorus-demo',
@@ -158,6 +182,7 @@ const project = {
       defaultTrackId: 'main-vocal-guide',
       guidePosition: 'none',
       defaultMarkStyle: 'highlight',
+      harmonyLevel: 1,
     },
     {
       id: 'upper-harmony',
@@ -167,6 +192,7 @@ const project = {
       defaultTrackId: 'upper-harmony-guide',
       guidePosition: 'above',
       defaultMarkStyle: 'line-above',
+      harmonyLevel: 1,
     },
     {
       id: 'lower-harmony',
@@ -176,6 +202,7 @@ const project = {
       defaultTrackId: 'lower-harmony-guide',
       guidePosition: 'below',
       defaultMarkStyle: 'line-below',
+      harmonyLevel: 1,
     },
   ],
   lyricDraft: [
@@ -273,12 +300,22 @@ function createCue({ id, startMs, endMs, segments }) {
   }
 }
 
-function createSegment({ id, role, text, partIds }) {
+function createSegment({ id, role, text, partIds, source }) {
   return {
     id,
     role,
     text,
     partIds,
+    source,
+  }
+}
+
+function createDraftSource({ draftLineId, text, startChar = 0, wholeLine }) {
+  return {
+    draftLineId,
+    startChar,
+    endChar: startChar + text.length,
+    ...(wholeLine ? { wholeLine: true } : {}),
   }
 }
 

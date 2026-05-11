@@ -199,8 +199,16 @@ type LyricSegment = {
   role: 'main' | 'sub'
   text: string
   partIds: string[]
+  source?: {
+    draftLineId: string
+    startChar: number
+    endChar: number
+    wholeLine?: boolean
+  }
 }
 ```
+
+`source`는 Lyrics 단계에서 수정되는 확정 가사와 Lane/Sub/Preview의 cue text를 다시 연결한다. 이전 v1 파일처럼 segment text만 저장된 cue는 import 시 가능한 경우 lyric draft line 참조로 승격한다.
 
 뮤지컬식 예시:
 
