@@ -1,4 +1,4 @@
-# 파일 포맷 v1
+# 파일 포맷 v2
 
 ## 1. 개요
 
@@ -13,7 +13,7 @@
 
 ## 2. ZIP 내부 구조
 
-v1 기본 구조:
+v2 기본 구조:
 
 ```txt
 song.eazychorus
@@ -28,7 +28,7 @@ song.eazychorus
    └─ mr.peaks.json
 ```
 
-`waveform/`은 선택 사항이다. v1 초기 구현에서는 생략할 수 있다.
+`waveform/`은 선택 사항이다.
 
 ## 3. 저장 원칙
 
@@ -58,7 +58,7 @@ song.eazychorus
 
 ```ts
 type EazyChorusProject = {
-  schemaVersion: 1
+  schemaVersion: 2
   app: 'eazy-chorus'
   project: ProjectMeta
   settings: ProjectSettings
@@ -233,6 +233,7 @@ type LyricCue = {
 ## 12. LyricSegment
 
 Segment는 cue 내부의 텍스트 조각이다. Main/Sub lyric role은 segment에 부여한다.
+v2부터 segment는 확정된 lyric draft의 line-local 범위를 참조할 수 있다. `text`는 렌더링과 validation을 위한 현재 캐시이며, Lyrics 단계에서 draft line이 수정되면 `source` 기준으로 다시 동기화한다.
 
 ```ts
 type LyricSegment = {
@@ -240,6 +241,14 @@ type LyricSegment = {
   role: 'main' | 'sub'
   text: string
   partIds: string[]
+  source?: LyricSegmentSource
+}
+
+type LyricSegmentSource = {
+  draftLineId: string
+  startChar: number
+  endChar: number
+  wholeLine?: boolean
 }
 ```
 
@@ -256,13 +265,23 @@ type LyricSegment = {
       "id": "seg-001-main",
       "role": "main",
       "text": "아가씨 ",
-      "partIds": ["actor-a"]
+      "partIds": ["actor-a"],
+      "source": {
+        "draftLineId": "lyric-draft-1",
+        "startChar": 0,
+        "endChar": 4
+      }
     },
     {
       "id": "seg-001-sub",
       "role": "sub",
       "text": "네?",
-      "partIds": ["actor-b"]
+      "partIds": ["actor-b"],
+      "source": {
+        "draftLineId": "lyric-draft-1",
+        "startChar": 4,
+        "endChar": 6
+      }
     }
   ]
 }
@@ -299,7 +318,7 @@ type PartMark = {
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "app": "eazy-chorus",
   "project": {
     "id": "project-001",
@@ -436,6 +455,7 @@ type PartMark = {
 - 모든 cue의 `startMs < endMs`인가.
 - 모든 cue의 `laneId`가 실제 lane을 가리키는가.
 - 모든 segment의 `text`가 비어 있지 않은가.
+- segment `source`가 있으면 실제 lyric draft line과 line-local 범위 안을 가리키는가.
 - 모든 PartMark의 `cueId`, `segmentId`, `partId`가 유효한가.
 - PartMark의 `startChar`, `endChar`가 segment text 범위 안에 있는가.
 - 음원 duration 차이가 큰 경우 경고한다.
@@ -444,6 +464,7 @@ type PartMark = {
 
 - 모든 프로젝트 파일은 `schemaVersion`을 가진다.
 - 앱은 현재 지원하는 schemaVersion보다 높은 파일을 열 때 경고해야 한다.
-- 낮은 schemaVersion은 migration function으로 v1 내부 모델로 변환한다.
+- v1 파일은 migration function으로 v2 내부 모델로 변환한다.
+- v1 cue에 `sourceRange` 또는 segment text 복사본만 있으면 가능한 경우 `LyricSegment.source`로 승격한다.
 - migration은 원본 파일을 직접 수정하지 않는다.
 - 사용자가 다시 내보내기할 때 최신 schemaVersion으로 저장한다.

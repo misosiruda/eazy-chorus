@@ -6,6 +6,7 @@ import type {
   LyricLane,
   LyricRole,
   LyricSegment,
+  LyricSegmentSource,
   PartMark,
 } from '../project-file'
 
@@ -36,6 +37,7 @@ type NewCueFromTextSelectionOptions = {
   linkId?: string
   sourceId?: string
   sourceRange?: LyricCueSourceRange
+  source?: LyricSegmentSource
   role?: LyricRole
 }
 
@@ -71,6 +73,12 @@ export function createCueFromDraftLine({
     lane,
     existingCues,
     sourceId: draftLine.id,
+    source: {
+      draftLineId: draftLine.id,
+      startChar: 0,
+      endChar: draftLine.text.length,
+      wholeLine: true,
+    },
   })
 }
 
@@ -81,6 +89,7 @@ export function createCueFromTextSelection({
   linkId,
   sourceId,
   sourceRange,
+  source,
   role,
 }: NewCueFromTextSelectionOptions): LyricCue {
   const normalizedText = text.trim()
@@ -93,6 +102,7 @@ export function createCueFromTextSelection({
     role: role ?? lane.defaultRole,
     text: normalizedText,
     partIds: lane.partId ? [lane.partId] : [],
+    ...(source ? { source } : {}),
   }
 
   return {
@@ -259,13 +269,18 @@ export function getSyncCueSequence(project: EazyChorusProject): LyricCue[] {
   const laneOrderById = new Map(
     project.lyricLanes.map((lane) => [lane.id, lane.order]),
   )
+  const draftLineOrderById = new Map(
+    project.lyricDraft.map((line, index) => [line.id, index]),
+  )
   const cueIndexById = new Map(
     project.cues.map((cue, index) => [cue.id, index]),
   )
 
   return [...project.cues].sort(
     (first, second) =>
-      getCueSourceOrder(first) - getCueSourceOrder(second) ||
+      getCueSourceLineOrder(first, draftLineOrderById) -
+        getCueSourceLineOrder(second, draftLineOrderById) ||
+      getCueSourceStartOrder(first) - getCueSourceStartOrder(second) ||
       getCueSourceEndOrder(first) - getCueSourceEndOrder(second) ||
       (laneOrderById.get(first.laneId) ?? 0) -
         (laneOrderById.get(second.laneId) ?? 0) ||
@@ -370,12 +385,34 @@ function normalizePositionMs(positionMs: number): number {
   return Number.isFinite(positionMs) ? Math.max(0, Math.round(positionMs)) : 0
 }
 
-function getCueSourceOrder(cue: LyricCue): number {
-  return cue.sourceRange?.startChar ?? Number.MAX_SAFE_INTEGER
+function getCueSourceLineOrder(
+  cue: LyricCue,
+  draftLineOrderById: ReadonlyMap<string, number>,
+): number {
+  const source = getFirstSegmentSource(cue)
+  return source
+    ? (draftLineOrderById.get(source.draftLineId) ?? Number.MAX_SAFE_INTEGER)
+    : Number.MAX_SAFE_INTEGER
+}
+
+function getCueSourceStartOrder(cue: LyricCue): number {
+  return (
+    getFirstSegmentSource(cue)?.startChar ??
+    cue.sourceRange?.startChar ??
+    Number.MAX_SAFE_INTEGER
+  )
 }
 
 function getCueSourceEndOrder(cue: LyricCue): number {
-  return cue.sourceRange?.endChar ?? Number.MAX_SAFE_INTEGER
+  return (
+    getFirstSegmentSource(cue)?.endChar ??
+    cue.sourceRange?.endChar ??
+    Number.MAX_SAFE_INTEGER
+  )
+}
+
+function getFirstSegmentSource(cue: LyricCue): LyricSegmentSource | undefined {
+  return cue.segments.find((segment) => segment.source)?.source
 }
 
 function createUniqueId(

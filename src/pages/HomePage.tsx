@@ -47,6 +47,9 @@ import {
   type PartMarkTextFragment,
 } from '../features/part-editor'
 import {
+  createLyricDraftDocumentText,
+  createLyricDraftLineRanges,
+  createLyricSegmentSourceFromSelectionRange,
   createMediaTrack,
   createNewProject,
   createPart,
@@ -57,6 +60,8 @@ import {
   type EazyChorusProject,
   type LyricCue,
   type LyricCueSourceRange,
+  type LyricDraftLineRange,
+  type LyricDraftSelectionRange,
   type LyricDraftLine,
   type LyricLane,
   type MediaTrack,
@@ -64,7 +69,9 @@ import {
   type Part,
   type PartMark,
   type ProjectMediaFiles,
+  resolveLyricSegmentSourceRange,
   sanitizeFileName,
+  syncProjectLyricSegmentTexts,
   touchProject,
   validateProjectPayload,
   type ValidationIssue,
@@ -267,7 +274,7 @@ export function HomePage() {
   const audioDurationMs = getProjectDurationMs(project)
   const activeTrackCount = project.media.filter((track) => track.enabled).length
   const lyricDraft = project.lyricDraft
-  const lyricDraftDocumentText = lyricDraft.map((line) => line.text).join('\n')
+  const lyricDraftDocumentText = createLyricDraftDocumentText(lyricDraft)
   const lyricDraftEditorText =
     lyricDraftEditorState.sourceText === lyricDraftDocumentText
       ? lyricDraftEditorState.editorText
@@ -287,10 +294,11 @@ export function HomePage() {
     () =>
       createLyricDocumentHighlights({
         documentText: lyricDraftDocumentText,
+        lineRanges: lyricDraftLineRanges,
         cues: timelineCues,
         project,
       }),
-    [lyricDraftDocumentText, project, timelineCues],
+    [lyricDraftDocumentText, lyricDraftLineRanges, project, timelineCues],
   )
   const lyricDocumentFragments = useMemo(
     () =>
@@ -304,13 +312,20 @@ export function HomePage() {
     () =>
       createPartMarkDocumentHighlights({
         documentText: lyricDraftDocumentText,
+        lineRanges: lyricDraftLineRanges,
         cues: timelineCues,
         partMarks: project.partMarks.filter(
           (mark) => mark.partId === selectedPartId && isVisualPartMark(mark),
         ),
         project,
       }),
-    [lyricDraftDocumentText, project, selectedPartId, timelineCues],
+    [
+      lyricDraftDocumentText,
+      lyricDraftLineRanges,
+      project,
+      selectedPartId,
+      timelineCues,
+    ],
   )
   const harmonyDocumentFragments = useMemo(
     () =>
@@ -843,6 +858,7 @@ export function HomePage() {
 
     const markTargets = createPartMarkTargetsFromDocumentSelection({
       documentText: lyricDraftDocumentText,
+      lineRanges: lyricDraftLineRanges,
       cues: timelineCues,
       selectionRange: selectedRange,
     })
@@ -1005,10 +1021,10 @@ export function HomePage() {
     }
 
     commitLaneEditorProject(
-      {
+      syncProjectLyricSegmentTexts({
         ...project,
         lyricDraft: nextDraft,
-      },
+      }),
       `${nextDraft.length}줄 lyric draft를 저장했습니다.`,
     )
   }
@@ -1020,10 +1036,10 @@ export function HomePage() {
     )
 
     commitLaneEditorProject(
-      {
+      syncProjectLyricSegmentTexts({
         ...project,
         lyricDraft: nextDraft,
-      },
+      }),
       nextDraft.length > 0
         ? `${nextDraft.length}줄 lyric draft를 수정했습니다.`
         : 'lyric draft를 비웠습니다.',
@@ -4380,38 +4396,61 @@ type PartMarkDocumentTarget = {
   endChar: number
 }
 
-type LyricDraftLineRange = LyricCueSourceRange & {
-  lineId: string
-  lineIndex: number
-}
-
-function createLyricDraftLineRanges(
-  draftLines: readonly LyricDraftLine[],
-): LyricDraftLineRange[] {
-  let cursor = 0
-
-  return draftLines.map((line, lineIndex) => {
-    const startChar = cursor
-    const endChar = startChar + line.text.length
-    cursor = endChar + 1
-
-    return {
-      lineId: line.id,
-      lineIndex,
-      startChar,
-      endChar,
-    }
-  })
-}
-
 function createLyricDraftFromEditedText(
   value: string,
   currentDraft: readonly LyricDraftLine[],
 ): LyricDraftLine[] {
-  return splitEditedLyricLines(value).map((text, index) => ({
-    id: currentDraft[index]?.id ?? `lyric-draft-${index + 1}`,
-    text,
-  }))
+  const editedLines = splitEditedLyricLines(value)
+  const usedDraftIndexes = new Set<number>()
+  const assignedIds = new Set<string>()
+  const existingIds = new Set(currentDraft.map((line) => line.id))
+
+  return editedLines.map((text, index) => {
+    const sameIndexDraft = currentDraft[index]
+    if (sameIndexDraft?.text === text) {
+      usedDraftIndexes.add(index)
+      assignedIds.add(sameIndexDraft.id)
+      return { id: sameIndexDraft.id, text }
+    }
+
+    const matchingDraftIndex = currentDraft.findIndex(
+      (draftLine, draftIndex) =>
+        !usedDraftIndexes.has(draftIndex) && draftLine.text === text,
+    )
+    if (matchingDraftIndex >= 0) {
+      usedDraftIndexes.add(matchingDraftIndex)
+      const id = currentDraft[matchingDraftIndex].id
+      assignedIds.add(id)
+      return { id, text }
+    }
+
+    if (
+      sameIndexDraft &&
+      !usedDraftIndexes.has(index) &&
+      !editedLines.slice(index + 1).includes(sameIndexDraft.text)
+    ) {
+      usedDraftIndexes.add(index)
+      assignedIds.add(sameIndexDraft.id)
+      return { id: sameIndexDraft.id, text }
+    }
+
+    const id = createLyricDraftLineId(existingIds, assignedIds)
+    assignedIds.add(id)
+    return { id, text }
+  })
+}
+
+function createLyricDraftLineId(
+  existingIds: ReadonlySet<string>,
+  assignedIds: ReadonlySet<string>,
+): string {
+  let lineNumber = 1
+  let candidate = `lyric-draft-${lineNumber}`
+  while (existingIds.has(candidate) || assignedIds.has(candidate)) {
+    lineNumber += 1
+    candidate = `lyric-draft-${lineNumber}`
+  }
+  return candidate
 }
 
 function trimTextSelectionRange(
@@ -4445,15 +4484,30 @@ function splitRangeByLyricDraftLines({
   documentText: string
   lineRanges: readonly LyricDraftLineRange[]
   range: LyricCueSourceRange
-}): LyricCueSourceRange[] {
+}): LyricDraftSelectionRange[] {
   return lineRanges
-    .map((lineRange) =>
-      trimTextSelectionRange(documentText, {
+    .map((lineRange) => {
+      const trimmedRange = trimTextSelectionRange(documentText, {
         startChar: Math.max(range.startChar, lineRange.startChar),
         endChar: Math.min(range.endChar, lineRange.endChar),
-      }),
+      })
+      if (!trimmedRange) {
+        return null
+      }
+
+      return {
+        ...trimmedRange,
+        lineId: lineRange.lineId,
+        lineIndex: lineRange.lineIndex,
+        lineStartChar: lineRange.startChar,
+        lineEndChar: lineRange.endChar,
+        localStartChar: trimmedRange.startChar - lineRange.startChar,
+        localEndChar: trimmedRange.endChar - lineRange.startChar,
+      }
+    })
+    .filter((lineRange): lineRange is LyricDraftSelectionRange =>
+      Boolean(lineRange),
     )
-    .filter((lineRange): lineRange is LyricCueSourceRange => Boolean(lineRange))
 }
 
 function createCueLinkId(laneId: string, range: LyricCueSourceRange): string {
@@ -4468,7 +4522,7 @@ function createCuesForRanges({
   linkId,
 }: {
   documentText: string
-  ranges: readonly LyricCueSourceRange[]
+  ranges: readonly LyricDraftSelectionRange[]
   lane: LyricLane
   existingCues: readonly LyricCue[]
   linkId?: string
@@ -4483,7 +4537,7 @@ function createCuesForRanges({
         existingCues: [...existingCues, ...nextCues],
         linkId,
         sourceId: `lyric-selection-${range.startChar}-${range.endChar}`,
-        sourceRange: range,
+        source: createLyricSegmentSourceFromSelectionRange(range),
         role: 'main',
       }),
     )
@@ -4494,10 +4548,12 @@ function createCuesForRanges({
 
 function createPartMarkTargetsFromDocumentSelection({
   documentText,
+  lineRanges,
   cues,
   selectionRange,
 }: {
   documentText: string
+  lineRanges: readonly LyricDraftLineRange[]
   cues: readonly LyricCue[]
   selectionRange: LyricCueSourceRange
 }): PartMarkDocumentTarget[] {
@@ -4507,6 +4563,7 @@ function createPartMarkTargetsFromDocumentSelection({
     const cueRange = resolveCueSourceRange(
       cue,
       documentText,
+      lineRanges,
       fallbackSearchStartByKey,
     )
     if (!cueRange || !rangesOverlap(cueRange, selectionRange)) {
@@ -4514,7 +4571,12 @@ function createPartMarkTargetsFromDocumentSelection({
     }
 
     return cue.segments.flatMap((segment) => {
-      const segmentRange = resolveSegmentSourceRange(cue, segment.id, cueRange)
+      const segmentRange = resolveSegmentSourceRange(
+        cue,
+        segment.id,
+        cueRange,
+        lineRanges,
+      )
       if (!segmentRange || !rangesOverlap(segmentRange, selectionRange)) {
         return []
       }
@@ -4700,7 +4762,7 @@ function createCueReplacementsAfterRangeRemoval({
         existingCues,
         linkId: cue.linkId,
         sourceId: `lyric-selection-${range.startChar}-${range.endChar}`,
-        sourceRange: range,
+        source: createLyricSegmentSourceFromSelectionRange(range),
         role: cue.segments[0]?.role ?? 'main',
       }),
     ),
@@ -4709,10 +4771,12 @@ function createCueReplacementsAfterRangeRemoval({
 
 function createLyricDocumentHighlights({
   documentText,
+  lineRanges,
   cues,
   project,
 }: {
   documentText: string
+  lineRanges: readonly LyricDraftLineRange[]
   cues: readonly LyricCue[]
   project: EazyChorusProject
 }): LyricDocumentHighlight[] {
@@ -4724,6 +4788,7 @@ function createLyricDocumentHighlights({
       const sourceRange = resolveCueSourceRange(
         cue,
         documentText,
+        lineRanges,
         fallbackSearchStartByKey,
       )
       if (!sourceRange) {
@@ -4747,11 +4812,13 @@ function createLyricDocumentHighlights({
 
 function createPartMarkDocumentHighlights({
   documentText,
+  lineRanges,
   cues,
   partMarks,
   project,
 }: {
   documentText: string
+  lineRanges: readonly LyricDraftLineRange[]
   cues: readonly LyricCue[]
   partMarks: readonly PartMark[]
   project: EazyChorusProject
@@ -4762,6 +4829,7 @@ function createPartMarkDocumentHighlights({
     const cueRange = resolveCueSourceRange(
       cue,
       documentText,
+      lineRanges,
       fallbackSearchStartByKey,
     )
     if (!cueRange) {
@@ -4769,7 +4837,12 @@ function createPartMarkDocumentHighlights({
     }
 
     return cue.segments.flatMap((segment) => {
-      const segmentRange = resolveSegmentSourceRange(cue, segment.id, cueRange)
+      const segmentRange = resolveSegmentSourceRange(
+        cue,
+        segment.id,
+        cueRange,
+        lineRanges,
+      )
       if (!segmentRange) {
         return []
       }
@@ -4802,8 +4875,23 @@ function createPartMarkDocumentHighlights({
 function resolveCueSourceRange(
   cue: LyricCue,
   documentText: string,
+  lineRanges: readonly LyricDraftLineRange[],
   fallbackSearchStartByKey: Map<string, number>,
 ): LyricCueSourceRange | null {
+  const segmentSourceRanges = cue.segments
+    .map((segment) =>
+      resolveLyricSegmentSourceRange(segment.source, lineRanges),
+    )
+    .filter((range): range is LyricCueSourceRange => Boolean(range))
+  if (segmentSourceRanges.length > 0) {
+    return {
+      startChar: Math.min(
+        ...segmentSourceRanges.map((range) => range.startChar),
+      ),
+      endChar: Math.max(...segmentSourceRanges.map((range) => range.endChar)),
+    }
+  }
+
   if (isValidSourceRange(cue.sourceRange, documentText.length)) {
     return cue.sourceRange
   }
@@ -4832,10 +4920,19 @@ function resolveSegmentSourceRange(
   cue: LyricCue,
   segmentId: string,
   cueRange: LyricCueSourceRange,
+  lineRanges: readonly LyricDraftLineRange[],
 ): LyricCueSourceRange | null {
   let offset = 0
 
   for (const segment of cue.segments) {
+    const sourceRange = resolveLyricSegmentSourceRange(
+      segment.source,
+      lineRanges,
+    )
+    if (segment.id === segmentId && sourceRange) {
+      return sourceRange
+    }
+
     const startChar = cueRange.startChar + offset
     const endChar = startChar + segment.text.length
     if (segment.id === segmentId) {

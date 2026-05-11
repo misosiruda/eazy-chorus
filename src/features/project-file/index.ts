@@ -1,4 +1,9 @@
 export {
+  EAZY_CHORUS_APP_ID,
+  PROJECT_SCHEMA_VERSION,
+  SUPPORTED_PROJECT_SCHEMA_VERSIONS,
+} from './types'
+export {
   createMediaTrack,
   createNewProject,
   createPart,
@@ -14,6 +19,7 @@ export type {
   LyricLane,
   LyricRole,
   LyricSegment,
+  LyricSegmentSource,
   MarkStyle,
   MediaRole,
   MediaTrack,
@@ -24,6 +30,16 @@ export type {
   ProjectPackage,
   ProjectSettings,
 } from './types'
+export {
+  createLyricDraftDocumentText,
+  createLyricDraftLineRanges,
+  createLyricSegmentSourceFromSelectionRange,
+  migrateLegacyLyricSources,
+  resolveLyricSegmentSourceRange,
+  syncProjectLyricSegmentTexts,
+  type LyricDraftLineRange,
+  type LyricDraftSelectionRange,
+} from './lyricSources'
 export {
   formatValidationIssue,
   hasValidationErrors,

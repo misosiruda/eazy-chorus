@@ -57,12 +57,18 @@ describe('lane-editor feature', () => {
         startMs: 0,
         endMs: 1,
         segments: [
-          {
+          expect.objectContaining({
             id: 'cue-line-1-seg-1',
             role: 'main',
             text: '첫번째 가사',
             partIds: ['main-vocal'],
-          },
+            source: {
+              draftLineId: 'line-1',
+              startChar: 0,
+              endChar: '첫번째 가사'.length,
+              wholeLine: true,
+            },
+          }),
         ],
       }),
     ])
@@ -188,5 +194,63 @@ describe('lane-editor feature', () => {
     expect(getNextSyncCueId(project, 'cue-lyric-selection-2-7')).toBe(
       'cue-lyric-selection-10-15',
     )
+  })
+
+  it('orders sync cues by lyric segment source before legacy cue source range', () => {
+    const project = {
+      ...createNewProject({
+        id: 'project-001',
+        now: new Date('2026-05-06T00:00:00.000Z'),
+      }),
+      lyricDraft: [
+        { id: 'line-1', text: '첫번째' },
+        { id: 'line-2', text: '두번째' },
+      ],
+      cues: [
+        {
+          id: 'cue-line-2',
+          laneId: 'lead',
+          startMs: 0,
+          endMs: 1,
+          segments: [
+            {
+              id: 'cue-line-2-seg-1',
+              role: 'main',
+              text: '두번째',
+              partIds: ['main-vocal'],
+              source: {
+                draftLineId: 'line-2',
+                startChar: 0,
+                endChar: '두번째'.length,
+              },
+            },
+          ],
+        },
+        {
+          id: 'cue-line-1',
+          laneId: 'lead',
+          startMs: 0,
+          endMs: 1,
+          segments: [
+            {
+              id: 'cue-line-1-seg-1',
+              role: 'main',
+              text: '첫번째',
+              partIds: ['main-vocal'],
+              source: {
+                draftLineId: 'line-1',
+                startChar: 0,
+                endChar: '첫번째'.length,
+              },
+            },
+          ],
+        },
+      ],
+    }
+
+    expect(getSyncCueSequence(project).map((cue) => cue.id)).toEqual([
+      'cue-line-1',
+      'cue-line-2',
+    ])
   })
 })

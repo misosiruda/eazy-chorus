@@ -1,7 +1,12 @@
 export const EAZY_CHORUS_APP_ID = 'eazy-chorus'
-export const PROJECT_SCHEMA_VERSION = 1
+export const PROJECT_SCHEMA_VERSION = 2
+export const SUPPORTED_PROJECT_SCHEMA_VERSIONS = [
+  1,
+  PROJECT_SCHEMA_VERSION,
+] as const
 
-export type ProjectSchemaVersion = typeof PROJECT_SCHEMA_VERSION
+export type ProjectSchemaVersion =
+  (typeof SUPPORTED_PROJECT_SCHEMA_VERSIONS)[number]
 
 export type MediaRole = 'mr' | 'part-audio'
 
@@ -77,6 +82,14 @@ export type LyricSegment = {
   role: LyricRole
   text: string
   partIds: string[]
+  source?: LyricSegmentSource
+}
+
+export type LyricSegmentSource = {
+  draftLineId: string
+  startChar: number
+  endChar: number
+  wholeLine?: boolean
 }
 
 export type LyricCueSourceRange = {
