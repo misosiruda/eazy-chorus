@@ -381,6 +381,57 @@ describe('HomePage', () => {
     )
   })
 
+  it('syncs Lane, Sub, and Preview when lyrics are edited after assignment', async () => {
+    const user = userEvent.setup()
+    renderHomePage()
+
+    await confirmOneLyricDraft(user)
+    await assignDraftToLeadLane(user)
+    await openEditorStep(user, 'Sub')
+
+    const harmonyDocument = screen.getByLabelText('sub lyric document')
+    selectElementText(harmonyDocument, 0, 2)
+    fireEvent.mouseUp(harmonyDocument)
+    expect(
+      screen.getByText('Main Vocal Sub를 표시했습니다.'),
+    ).toBeInTheDocument()
+
+    await openEditorStep(user, 'Lyrics')
+    const finalLyricsEditor = screen.getByLabelText('최종 가사 편집')
+    await user.clear(finalLyricsEditor)
+    await user.type(finalLyricsEditor, '키미노 이름을 불렀다')
+    await user.click(screen.getByRole('button', { name: '최종 가사 저장' }))
+
+    await openEditorStep(user, 'Lane')
+    expect(
+      screen.getByText('키미노 이름을 불렀다', { selector: 'mark' }),
+    ).toHaveClass('lyric-highlight-mark')
+    expect(
+      screen.queryByText('키미노 나오 욘다', { selector: 'mark' }),
+    ).toBeNull()
+
+    await openEditorStep(user, 'Sub')
+    expect(screen.getByLabelText('sub lyric document')).toHaveTextContent(
+      '키미노 이름을 불렀다',
+    )
+    expect(screen.getByText('키미', { selector: 'mark' })).toHaveClass(
+      'sub-highlight-mark',
+    )
+
+    await openEditorStep(user, 'Preview')
+    const viewerStage = screen.getByLabelText('viewer lyrics document')
+    expect(
+      within(viewerStage).getByRole('button', {
+        name: /키미노 이름을 불렀다/,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      within(viewerStage).queryByRole('button', {
+        name: /키미노 나오 욘다/,
+      }),
+    ).toBeNull()
+  })
+
   it('matches a dragged lyric selection into the selected Lane', async () => {
     const user = userEvent.setup()
     renderHomePage()
