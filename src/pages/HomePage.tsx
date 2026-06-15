@@ -98,6 +98,8 @@ type EditorWizardStep =
   | 'preview'
 type ViewerPartFocusMode = 'all' | 'lane' | 'marks'
 type PendingPreviewAnnotation = {
+  markId?: string
+  mode: 'create' | 'edit'
   partId: string
   targets: PartMarkDocumentTarget[]
   selectedText: string
@@ -926,6 +928,7 @@ export function HomePage() {
     }
 
     setPendingPreviewAnnotation({
+      mode: 'create',
       partId: selectedPart.id,
       targets: annotationTargets,
       selectedText,
@@ -945,6 +948,38 @@ export function HomePage() {
 
   function closePreviewAnnotationDialog() {
     setPendingPreviewAnnotation(null)
+  }
+
+  function editPreviewAnnotation(mark: PartMark) {
+    if (!hasPartMarkNote(mark)) {
+      return
+    }
+
+    const part = project.parts.find((item) => item.id === mark.partId)
+    if (!part) {
+      setStatusMessage('수정할 주석의 part를 찾을 수 없습니다.')
+      return
+    }
+
+    setPendingPreviewAnnotation({
+      mode: 'edit',
+      markId: mark.id,
+      partId: part.id,
+      targets: [
+        {
+          cueId: mark.cueId,
+          segmentId: mark.segmentId,
+          startChar: mark.startChar,
+          endChar: mark.endChar,
+        },
+      ],
+      selectedText: formatPartMarkAnnotationSource(mark, project),
+      note: mark.note.trim(),
+    })
+    setSelectedPartId(part.id)
+    setSelectedCueId(mark.cueId)
+    setViewerFocusedPartId(part.id)
+    setStatusMessage(`${part.name} 주석을 수정합니다.`)
   }
 
   function savePendingPreviewAnnotation() {
@@ -967,6 +1002,18 @@ export function HomePage() {
       return
     }
 
+    if (pendingPreviewAnnotation.mode === 'edit') {
+      const editingMark = project.partMarks.find(
+        (mark) =>
+          mark.id === pendingPreviewAnnotation.markId && hasPartMarkNote(mark),
+      )
+      if (!editingMark) {
+        setStatusMessage('수정할 주석을 찾을 수 없습니다.')
+        setPendingPreviewAnnotation(null)
+        return
+      }
+    }
+
     const nextProject = pendingPreviewAnnotation.targets.reduce(
       (currentProject, target) =>
         upsertPartMarkAnnotation(currentProject, {
@@ -986,10 +1033,45 @@ export function HomePage() {
 
     commitLaneEditorProject(
       nextProject,
-      `${part.name} 주석 ${pendingPreviewAnnotation.targets.length}개를 저장했습니다.`,
+      pendingPreviewAnnotation.mode === 'edit'
+        ? `${part.name} 주석을 수정했습니다.`
+        : `${part.name} 주석 ${pendingPreviewAnnotation.targets.length}개를 저장했습니다.`,
     )
     setSelectedCueId(pendingPreviewAnnotation.targets[0].cueId)
     setViewerFocusedPartId(part.id)
+    setPendingPreviewAnnotation(null)
+  }
+
+  function deletePendingPreviewAnnotation() {
+    if (
+      !pendingPreviewAnnotation ||
+      pendingPreviewAnnotation.mode !== 'edit' ||
+      !pendingPreviewAnnotation.markId
+    ) {
+      return
+    }
+
+    const mark = project.partMarks.find(
+      (item) => item.id === pendingPreviewAnnotation.markId,
+    )
+    if (!mark || !hasPartMarkNote(mark)) {
+      setStatusMessage('삭제할 주석을 찾을 수 없습니다.')
+      setPendingPreviewAnnotation(null)
+      return
+    }
+
+    const part = project.parts.find((item) => item.id === mark.partId)
+    const nextProject: EazyChorusProject = {
+      ...project,
+      partMarks: project.partMarks.filter((item) => item.id !== mark.id),
+    }
+
+    commitLaneEditorProject(
+      nextProject,
+      `${part?.name ?? mark.partId} 주석을 삭제했습니다.`,
+    )
+    setSelectedCueId(mark.cueId)
+    setViewerFocusedPartId(mark.partId)
     setPendingPreviewAnnotation(null)
   }
 
@@ -3235,6 +3317,11 @@ export function HomePage() {
                             focusMode={viewerPartFocusMode}
                             focusedPartId={effectiveViewerFocusedPartId}
                             isCuePartFocused={isViewerCuePartFocused}
+                            onEditNote={
+                              isEditorNotesStep
+                                ? editPreviewAnnotation
+                                : undefined
+                            }
                             parts={project.parts}
                             partMarks={project.partMarks}
                           />
@@ -3889,7 +3976,11 @@ export function HomePage() {
             }}
           >
             <div className="panel-title-row">
-              <h2 id="preview-annotation-dialog-title">Part Note</h2>
+              <h2 id="preview-annotation-dialog-title">
+                {pendingPreviewAnnotation.mode === 'edit'
+                  ? 'Part Note 수정'
+                  : 'Part Note'}
+              </h2>
               <span>{pendingPreviewAnnotationPart?.name ?? 'Part'}</span>
             </div>
             <p className="preview-annotation-target">
@@ -3907,7 +3998,25 @@ export function HomePage() {
                 }
               />
             </label>
-            <div className="preview-annotation-dialog-actions">
+            <div
+              className={[
+                'preview-annotation-dialog-actions',
+                pendingPreviewAnnotation.mode === 'edit'
+                  ? 'preview-annotation-dialog-actions-edit'
+                  : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+            >
+              {pendingPreviewAnnotation.mode === 'edit' ? (
+                <button
+                  className="preview-annotation-delete"
+                  type="button"
+                  onClick={deletePendingPreviewAnnotation}
+                >
+                  삭제
+                </button>
+              ) : null}
               <button type="button" onClick={closePreviewAnnotationDialog}>
                 취소
               </button>
@@ -3964,6 +4073,7 @@ function ViewerCueText({
   focusMode,
   focusedPartId,
   isCuePartFocused,
+  onEditNote,
   parts,
   partMarks,
 }: {
@@ -3971,6 +4081,7 @@ function ViewerCueText({
   focusMode: ViewerPartFocusMode
   focusedPartId: string | null
   isCuePartFocused: boolean
+  onEditNote?: (mark: PartMark) => void
   parts: readonly Part[]
   partMarks: readonly PartMark[]
 }) {
@@ -4010,6 +4121,7 @@ function ViewerCueText({
                 focusedPartId={focusedPartId}
                 key={`${segment.id}-${fragment.startChar}-${fragment.endChar}`}
                 noteMarks={noteSegmentMarks}
+                onEditNote={onEditNote}
                 parts={parts}
                 segmentId={segment.id}
               />
@@ -4097,6 +4209,7 @@ function PartMarkFragment({
   focusedPartId,
   fragment,
   noteMarks,
+  onEditNote,
   parts,
   segmentId,
 }: {
@@ -4104,6 +4217,7 @@ function PartMarkFragment({
   focusedPartId: string | null
   fragment: PartMarkTextFragment
   noteMarks: readonly PartMark[]
+  onEditNote?: (mark: PartMark) => void
   parts: readonly Part[]
   segmentId: string
 }) {
@@ -4186,14 +4300,31 @@ function PartMarkFragment({
                   parts,
                 )}
               >
-                {bodyFragment.noteMarks.map((mark) => (
-                  <span
-                    className="part-mark-note-indicator"
-                    key={`note-indicator-${mark.id}`}
-                    style={createPartNoteIndicatorStyle(mark, parts)}
-                    aria-hidden="true"
-                  />
-                ))}
+                {bodyFragment.noteMarks.map((mark) =>
+                  onEditNote ? (
+                    <button
+                      className="part-mark-note-indicator part-mark-note-indicator-button"
+                      key={`note-indicator-${mark.id}`}
+                      type="button"
+                      style={createPartNoteIndicatorStyle(mark, parts)}
+                      aria-label={formatPartMarkNoteActionLabel(mark, parts)}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onEditNote(mark)
+                      }}
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onMouseUp={(event) => event.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="part-mark-note-indicator"
+                      key={`note-indicator-${mark.id}`}
+                      style={createPartNoteIndicatorStyle(mark, parts)}
+                      aria-hidden="true"
+                    />
+                  ),
+                )}
               </span>
             ) : null}
             {bodyFragment.noteMarks.length > 0 ? (
@@ -5294,6 +5425,17 @@ function formatPartMarkNoteSummary(
   parts: readonly Part[],
 ): string {
   return marks.map((mark) => formatPartMarkNote(mark, parts)).join(', ')
+}
+
+function formatPartMarkNoteActionLabel(
+  mark: PartMark,
+  parts: readonly Part[],
+): string {
+  const partName =
+    parts.find((part) => part.id === mark.partId)?.name ?? mark.partId
+  const note = mark.note?.trim()
+
+  return note ? `${partName} 주석 수정: ${note}` : `${partName} 주석 수정`
 }
 
 function createPartNoteIndicatorStyle(

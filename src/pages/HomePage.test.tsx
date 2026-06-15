@@ -729,6 +729,83 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
   })
 
+  it('edits and deletes a note from the lyric note indicator', async () => {
+    const user = userEvent.setup()
+    renderHomePage()
+
+    await openEditorStep(user, 'Audio')
+    await confirmOneLyricDraft(user)
+    await assignDraftToLeadLane(user)
+    await openEditorStep(user, 'Notes')
+
+    const viewerStage = screen.getByLabelText('viewer lyrics document')
+    const viewerText = within(viewerStage).getByText('키미노 나오 욘다', {
+      selector: '.part-mark-fragment-text',
+    })
+    selectElementText(viewerText, 0, 2)
+    fireEvent.mouseUp(viewerStage)
+
+    let dialog = screen.getByRole('dialog', { name: 'Part Note' })
+    await user.type(
+      within(dialog).getByLabelText('Notes 주석 입력'),
+      '첫 호흡을 짧게',
+    )
+    await user.click(within(dialog).getByRole('button', { name: '저장' }))
+
+    await user.click(
+      within(viewerStage).getByRole('button', {
+        name: 'Main Vocal 주석 수정: 첫 호흡을 짧게',
+      }),
+    )
+
+    dialog = screen.getByRole('dialog', { name: 'Part Note 수정' })
+    const noteInput = within(dialog).getByLabelText('Notes 주석 입력')
+    expect(noteInput).toHaveValue('첫 호흡을 짧게')
+    await user.clear(noteInput)
+    await user.type(noteInput, '첫 호흡을 길게')
+    await user.click(within(dialog).getByRole('button', { name: '저장' }))
+
+    expect(
+      screen.getByText('Main Vocal 주석을 수정했습니다.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('첫 호흡을 길게', {
+        selector: '.preview-annotation-list span',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('첫 호흡을 짧게', {
+        selector: '.preview-annotation-list span',
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      viewerStage.querySelector('.part-mark-note-tooltip'),
+    ).toHaveTextContent('Main Vocal: 첫 호흡을 길게')
+
+    await user.click(
+      within(viewerStage).getByRole('button', {
+        name: 'Main Vocal 주석 수정: 첫 호흡을 길게',
+      }),
+    )
+
+    dialog = screen.getByRole('dialog', { name: 'Part Note 수정' })
+    await user.click(within(dialog).getByRole('button', { name: '삭제' }))
+
+    expect(
+      screen.getByText('Main Vocal 주석을 삭제했습니다.'),
+    ).toBeInTheDocument()
+    expect(
+      within(viewerStage).queryByRole('button', {
+        name: /Main Vocal 주석 수정/,
+      }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('첫 호흡을 길게', {
+        selector: '.preview-annotation-list span',
+      }),
+    ).not.toBeInTheDocument()
+  })
+
   it('keeps the harmony line continuous when a note is added inside the mark', async () => {
     const user = userEvent.setup()
     renderHomePage()
