@@ -82,14 +82,30 @@ export async function openDriveProjectFromLink({
     accessTokenProvider ??
     (() => requestGoogleDriveAccessToken({ clientId: trimmedClientId }))
   )()
-  const metadata = await fetchGoogleDriveFileMetadata({
+  return openDriveProjectFromLocator({
     accessToken: token.accessToken,
     fetchImpl,
     locator: initialLocator,
   })
+}
+
+export async function openDriveProjectFromLocator({
+  accessToken,
+  fetchImpl,
+  locator: initialLocator,
+}: {
+  accessToken: string
+  fetchImpl?: typeof fetch
+  locator: DriveProjectFileLocator
+}): Promise<DriveProjectOpenResult> {
+  const metadata = await fetchGoogleDriveFileMetadata({
+    accessToken,
+    fetchImpl,
+    locator: initialLocator,
+  })
   const locator: DriveProjectFileLocator = {
-    fileId: parsedLink.fileId,
-    resourceKey: parsedLink.resourceKey ?? metadata.resourceKey,
+    fileId: initialLocator.fileId,
+    resourceKey: initialLocator.resourceKey ?? metadata.resourceKey,
   }
   const access = resolveDriveProjectAccess(metadata.capabilities)
   if (!access.canOpen) {
@@ -108,7 +124,7 @@ export async function openDriveProjectFromLink({
   }
 
   const blob = await downloadGoogleDriveFile({
-    accessToken: token.accessToken,
+    accessToken,
     fetchImpl,
     locator,
   })

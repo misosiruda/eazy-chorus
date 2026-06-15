@@ -13,6 +13,8 @@ const GOOGLE_TOKEN_REQUEST_TIMEOUT_MS = 120_000
 
 export const GOOGLE_DRIVE_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.readonly'
+export const GOOGLE_DRIVE_FILE_SCOPE =
+  'https://www.googleapis.com/auth/drive.file'
 export const GOOGLE_DRIVE_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive'
 
 type GoogleTokenResponse = {
