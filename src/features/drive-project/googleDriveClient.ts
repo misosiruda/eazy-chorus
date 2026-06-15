@@ -80,6 +80,14 @@ export class GoogleDriveClientError extends Error {
 
 let googleIdentityScriptPromise: Promise<void> | null = null
 
+export function isGoogleDriveIdentityReady(): boolean {
+  return !!window.google?.accounts?.oauth2?.initTokenClient
+}
+
+export function preloadGoogleDriveIdentityScript(): Promise<void> {
+  return loadGoogleIdentityScript()
+}
+
 export async function requestGoogleDriveAccessToken({
   clientId,
   prompt = '',
@@ -89,8 +97,6 @@ export async function requestGoogleDriveAccessToken({
   prompt?: 'consent' | 'none' | ''
   scope?: string
 }): Promise<GoogleDriveAccessToken> {
-  await loadGoogleIdentityScript()
-
   const tokenFactory = window.google?.accounts?.oauth2?.initTokenClient
   if (!tokenFactory) {
     throw new GoogleDriveClientError(

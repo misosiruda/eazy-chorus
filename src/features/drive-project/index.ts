@@ -8,6 +8,8 @@ export {
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
   fetchGoogleDriveFileMetadata,
+  isGoogleDriveIdentityReady,
+  preloadGoogleDriveIdentityScript,
   requestGoogleDriveAccessToken,
   type GoogleDriveAccessToken,
   type GoogleDriveClientErrorReason,

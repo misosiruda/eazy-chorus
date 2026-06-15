@@ -18,7 +18,9 @@ import {
 import {
   DriveProjectOpenError,
   GoogleDriveClientError,
+  isGoogleDriveIdentityReady,
   openDriveProjectFromLink,
+  preloadGoogleDriveIdentityScript,
 } from '../features/drive-project'
 import {
   countExportedLines,
@@ -189,6 +191,8 @@ export function HomePage() {
   const [statusMessage, setStatusMessage] =
     useState('새 프로젝트가 준비되었습니다.')
   const [driveProjectLink, setDriveProjectLink] = useState('')
+  const [isGoogleDriveIdentityLoaded, setIsGoogleDriveIdentityLoaded] =
+    useState(() => isGoogleDriveIdentityReady())
   const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
@@ -525,6 +529,36 @@ export function HomePage() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
+
+  useEffect(() => {
+    if (!googleDriveClientId || isGoogleDriveIdentityReady()) {
+      return
+    }
+
+    let isMounted = true
+    void preloadGoogleDriveIdentityScript()
+      .then(() => {
+        if (!isMounted) {
+          return
+        }
+
+        setIsGoogleDriveIdentityLoaded(true)
+      })
+      .catch(() => {
+        if (!isMounted) {
+          return
+        }
+
+        setIsGoogleDriveIdentityLoaded(false)
+        setStatusMessage(
+          'Google Drive 로그인을 준비할 수 없습니다. 네트워크 또는 브라우저 설정을 확인하세요.',
+        )
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [googleDriveClientId])
 
   useEffect(() => {
     if (!pendingPreviewAnnotation) {
@@ -2055,6 +2089,11 @@ export function HomePage() {
     const link = driveProjectLink.trim()
     if (!link) {
       setStatusMessage('Google Drive 공유 링크를 입력하세요.')
+      return
+    }
+
+    if (!isGoogleDriveIdentityLoaded) {
+      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
       return
     }
 
@@ -4044,7 +4083,8 @@ export function HomePage() {
                   disabled={
                     isProjectFileBusy ||
                     !driveProjectLink.trim() ||
-                    !googleDriveClientId
+                    !googleDriveClientId ||
+                    !isGoogleDriveIdentityLoaded
                   }
                 >
                   Drive 열기
@@ -4052,6 +4092,10 @@ export function HomePage() {
                 {!googleDriveClientId ? (
                   <p className="workspace-drive-status">
                     Google Drive 로그인 설정 필요
+                  </p>
+                ) : !isGoogleDriveIdentityLoaded ? (
+                  <p className="workspace-drive-status">
+                    Google Drive 로그인 준비 중
                   </p>
                 ) : null}
               </form>

@@ -3,6 +3,8 @@ import {
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
   fetchGoogleDriveFileMetadata,
+  isGoogleDriveIdentityReady,
+  preloadGoogleDriveIdentityScript,
   requestGoogleDriveAccessToken,
 } from './googleDriveClient'
 
@@ -43,6 +45,16 @@ describe('googleDriveClient', () => {
     })
   })
 
+  it('rejects token requests before Google Identity Services is preloaded', async () => {
+    window.google = undefined
+
+    await expect(
+      requestGoogleDriveAccessToken({ clientId: 'client-id' }),
+    ).rejects.toMatchObject({
+      reason: 'google-identity-unavailable',
+    })
+  })
+
   it('rejects an access token request when Google never calls back', async () => {
     vi.useFakeTimers()
     window.google = {
@@ -69,20 +81,21 @@ describe('googleDriveClient', () => {
   it('removes a failed Google Identity script before retrying', async () => {
     window.google = undefined
 
-    const firstTokenRequest = requestGoogleDriveAccessToken({
-      clientId: 'client-id',
-    })
-    const firstScript = document.getElementById('google-identity-services-script')
+    const firstTokenRequest = preloadGoogleDriveIdentityScript()
+    const firstScript = document.getElementById(
+      'google-identity-services-script',
+    )
     firstScript?.dispatchEvent(new Event('error'))
 
     await expect(firstTokenRequest).rejects.toMatchObject({
       reason: 'google-identity-load-failed',
     })
-    expect(document.getElementById('google-identity-services-script')).toBeNull()
+    expect(
+      document.getElementById('google-identity-services-script'),
+    ).toBeNull()
+    expect(isGoogleDriveIdentityReady()).toBe(false)
 
-    const secondTokenRequest = requestGoogleDriveAccessToken({
-      clientId: 'client-id',
-    })
+    const secondTokenRequest = preloadGoogleDriveIdentityScript()
     const secondScript = document.getElementById(
       'google-identity-services-script',
     )

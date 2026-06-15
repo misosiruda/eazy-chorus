@@ -7,7 +7,11 @@ import {
   exportProjectPackage,
 } from '../features/project-file'
 
-const openDriveProjectFromLinkMock = vi.hoisted(() => vi.fn())
+const driveProjectMocks = vi.hoisted(() => ({
+  isGoogleDriveIdentityReady: vi.fn(() => false),
+  openDriveProjectFromLink: vi.fn(),
+  preloadGoogleDriveIdentityScript: vi.fn(async () => undefined),
+}))
 
 vi.mock('../features/drive-project', async (importOriginal) => {
   const actual =
@@ -15,7 +19,10 @@ vi.mock('../features/drive-project', async (importOriginal) => {
 
   return {
     ...actual,
-    openDriveProjectFromLink: openDriveProjectFromLinkMock,
+    isGoogleDriveIdentityReady: driveProjectMocks.isGoogleDriveIdentityReady,
+    openDriveProjectFromLink: driveProjectMocks.openDriveProjectFromLink,
+    preloadGoogleDriveIdentityScript:
+      driveProjectMocks.preloadGoogleDriveIdentityScript,
   }
 })
 
@@ -127,7 +134,13 @@ async function createDriveOpenResult(mode: 'editor' | 'viewer') {
 
 describe('HomePage', () => {
   afterEach(() => {
-    openDriveProjectFromLinkMock.mockReset()
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReset()
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(false)
+    driveProjectMocks.openDriveProjectFromLink.mockReset()
+    driveProjectMocks.preloadGoogleDriveIdentityScript.mockReset()
+    driveProjectMocks.preloadGoogleDriveIdentityScript.mockResolvedValue(
+      undefined,
+    )
     vi.unstubAllEnvs()
   })
 
@@ -259,8 +272,9 @@ describe('HomePage', () => {
 
   it('opens a Google Drive viewer project in practice mode', async () => {
     vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
     const user = userEvent.setup()
-    openDriveProjectFromLinkMock.mockResolvedValue(
+    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
       await createDriveOpenResult('viewer'),
     )
 
@@ -272,7 +286,7 @@ describe('HomePage', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
 
-    expect(openDriveProjectFromLinkMock).toHaveBeenCalledWith({
+    expect(driveProjectMocks.openDriveProjectFromLink).toHaveBeenCalledWith({
       clientId: 'google-client-id',
       link: 'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
     })
