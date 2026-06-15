@@ -1,11 +1,13 @@
 import { vi } from 'vitest'
 import {
+  GOOGLE_DRIVE_WRITE_SCOPE,
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
   fetchGoogleDriveFileMetadata,
   isGoogleDriveIdentityReady,
   preloadGoogleDriveIdentityScript,
   requestGoogleDriveAccessToken,
+  updateGoogleDriveFileContent,
 } from './googleDriveClient'
 
 describe('googleDriveClient', () => {
@@ -43,6 +45,12 @@ describe('googleDriveClient', () => {
       scope: 'drive-scope',
       tokenType: 'Bearer',
     })
+  })
+
+  it('uses the Drive write scope for user-initiated Drive saves', () => {
+    expect(GOOGLE_DRIVE_WRITE_SCOPE).toBe(
+      'https://www.googleapis.com/auth/drive',
+    )
   })
 
   it('rejects token requests before Google Identity Services is preloaded', async () => {
@@ -171,6 +179,118 @@ describe('googleDriveClient', () => {
       Authorization: 'Bearer access-token',
     })
     expect(await blob.text()).toBe('project')
+  })
+
+  it('updates Drive file content through a resumable upload session', async () => {
+    const content = new Blob(['project'], { type: 'application/zip' })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          headers: { Location: 'https://upload.example/session' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          id: '1AbC_def-GHIjkl',
+          name: 'song.eazychorus',
+          version: '2',
+          capabilities: {
+            canDownload: true,
+            canEdit: true,
+            canModifyContent: true,
+          },
+        }),
+      )
+
+    const metadata = await updateGoogleDriveFileContent({
+      accessToken: 'access-token',
+      content,
+      fetchImpl: fetchMock,
+      locator: {
+        fileId: '1AbC_def-GHIjkl',
+        resourceKey: '0-AbC_def-GHIjkl',
+      },
+    })
+
+    const [sessionUrl, sessionRequest] = fetchMock.mock.calls[0]
+    expect(sessionUrl).toBeInstanceOf(URL)
+    expect((sessionUrl as URL).origin).toBe('https://www.googleapis.com')
+    expect((sessionUrl as URL).pathname).toBe(
+      '/upload/drive/v3/files/1AbC_def-GHIjkl',
+    )
+    expect((sessionUrl as URL).searchParams.get('uploadType')).toBe('resumable')
+    expect((sessionUrl as URL).searchParams.get('supportsAllDrives')).toBe(
+      'true',
+    )
+    expect((sessionUrl as URL).searchParams.get('fields')).toContain(
+      'headRevisionId',
+    )
+    expect(sessionRequest?.method).toBe('PATCH')
+    expect(sessionRequest?.headers).toEqual({
+      Authorization: 'Bearer access-token',
+      'X-Goog-Drive-Resource-Keys': '1AbC_def-GHIjkl/0-AbC_def-GHIjkl',
+      'X-Upload-Content-Length': '7',
+      'X-Upload-Content-Type': 'application/zip',
+    })
+    expect(sessionRequest?.body).toBeUndefined()
+
+    const [uploadUrl, uploadRequest] = fetchMock.mock.calls[1]
+    expect(uploadUrl).toBe('https://upload.example/session')
+    expect(uploadRequest?.method).toBe('PUT')
+    expect(uploadRequest?.headers).toEqual({
+      'Content-Type': 'application/zip',
+    })
+    expect(uploadRequest?.body).toBe(content)
+    expect(metadata.version).toBe('2')
+  })
+
+  it('throws a typed error when the resumable upload session has no location', async () => {
+    const fetchMock = vi.fn(async () => new Response(null))
+
+    await expect(
+      updateGoogleDriveFileContent({
+        accessToken: 'access-token',
+        content: new Blob(['project'], { type: 'application/zip' }),
+        fetchImpl: fetchMock,
+        locator: { fileId: '1AbC_def-GHIjkl' },
+      }),
+    ).rejects.toMatchObject({
+      reason: 'upload-session-missing-location',
+    })
+  })
+
+  it('throws typed errors when Drive upload requests fail', async () => {
+    await expect(
+      updateGoogleDriveFileContent({
+        accessToken: 'access-token',
+        content: new Blob(['project'], { type: 'application/zip' }),
+        fetchImpl: vi.fn(async () => new Response(null, { status: 403 })),
+        locator: { fileId: '1AbC_def-GHIjkl' },
+      }),
+    ).rejects.toMatchObject({
+      reason: 'upload-session-request-failed',
+      status: 403,
+    })
+
+    await expect(
+      updateGoogleDriveFileContent({
+        accessToken: 'access-token',
+        content: new Blob(['project'], { type: 'application/zip' }),
+        fetchImpl: vi
+          .fn()
+          .mockResolvedValueOnce(
+            new Response(null, {
+              headers: { Location: 'https://upload.example/session' },
+            }),
+          )
+          .mockResolvedValueOnce(new Response(null, { status: 500 })),
+        locator: { fileId: '1AbC_def-GHIjkl' },
+      }),
+    ).rejects.toMatchObject({
+      reason: 'upload-request-failed',
+      status: 500,
+    })
   })
 
   it('throws a typed error when Drive metadata requests fail', async () => {
