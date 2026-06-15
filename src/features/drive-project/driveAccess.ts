@@ -40,6 +40,15 @@ export function resolveDriveProjectAccess(
     }
   }
 
+  if (capabilities.canModifyContent === false) {
+    return {
+      canOpen: true,
+      mode: 'viewer',
+      canSaveToDrive: false,
+      reason: 'content-modification-disabled',
+    }
+  }
+
   if (capabilities.canEdit) {
     return {
       canOpen: true,

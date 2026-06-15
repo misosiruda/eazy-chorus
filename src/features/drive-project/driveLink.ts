@@ -1,6 +1,7 @@
 import type { DriveProjectLinkParseResult } from './types'
 
 const DRIVE_FILE_ID_PATTERN = /^[A-Za-z0-9_-]+$/
+const DRIVE_RESOURCE_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/
 const GOOGLE_DRIVE_HOSTS = new Set([
   'drive.google.com',
   'drive.usercontent.google.com',
@@ -35,7 +36,17 @@ export function parseGoogleDriveProjectLink(
       return { ok: false, reason: 'invalid-file-id' }
     }
 
-    return { ok: true, fileId: pathFileId, source: 'file-path' }
+    const resourceKeyResult = getResourceKey(url)
+    if (!resourceKeyResult.ok) {
+      return resourceKeyResult
+    }
+
+    return {
+      ok: true,
+      fileId: pathFileId,
+      resourceKey: resourceKeyResult.resourceKey,
+      source: 'file-path',
+    }
   }
 
   if (url.pathname.startsWith('/drive/folders/')) {
@@ -51,15 +62,25 @@ export function parseGoogleDriveProjectLink(
     return { ok: false, reason: 'invalid-file-id' }
   }
 
+  const resourceKeyResult = getResourceKey(url)
+  if (!resourceKeyResult.ok) {
+    return resourceKeyResult
+  }
+
   return {
     ok: true,
     fileId: queryFileId,
+    resourceKey: resourceKeyResult.resourceKey,
     source: getQueryLinkSource(url.pathname),
   }
 }
 
 export function isValidDriveFileId(fileId: string): boolean {
   return DRIVE_FILE_ID_PATTERN.test(fileId)
+}
+
+export function isValidDriveResourceKey(resourceKey: string): boolean {
+  return DRIVE_RESOURCE_KEY_PATTERN.test(resourceKey)
 }
 
 function getFileIdFromPath(pathname: string): string | null {
@@ -77,4 +98,21 @@ function getQueryLinkSource(pathname: string) {
   }
 
   return 'query-id'
+}
+
+function getResourceKey(
+  url: URL,
+):
+  | { ok: true; resourceKey?: string }
+  | { ok: false; reason: 'invalid-resource-key' } {
+  const resourceKey = url.searchParams.get('resourcekey')
+  if (!resourceKey) {
+    return { ok: true }
+  }
+
+  if (!isValidDriveResourceKey(resourceKey)) {
+    return { ok: false, reason: 'invalid-resource-key' }
+  }
+
+  return { ok: true, resourceKey }
 }

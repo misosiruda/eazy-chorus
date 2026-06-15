@@ -15,6 +15,15 @@ describe('drive-project access resolution', () => {
       },
     ],
     [
+      { canDownload: true, canEdit: true, canModifyContent: false },
+      {
+        canOpen: true,
+        mode: 'viewer',
+        canSaveToDrive: false,
+        reason: 'content-modification-disabled',
+      },
+    ],
+    [
       { canDownload: true, canEdit: true },
       {
         canOpen: true,

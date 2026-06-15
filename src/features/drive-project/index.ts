@@ -2,7 +2,11 @@ export {
   isDriveProjectPackageCandidate,
   resolveDriveProjectAccess,
 } from './driveAccess'
-export { isValidDriveFileId, parseGoogleDriveProjectLink } from './driveLink'
+export {
+  isValidDriveFileId,
+  isValidDriveResourceKey,
+  parseGoogleDriveProjectLink,
+} from './driveLink'
 export type {
   DriveProjectAccessDeniedReason,
   DriveProjectAccessMode,

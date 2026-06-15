@@ -19,6 +19,7 @@ export type GoogleDriveProjectFileMetadata = {
 export type DriveProjectAccessReason =
   | 'can-modify-content'
   | 'can-edit'
+  | 'content-modification-disabled'
   | 'download-only'
 
 export type DriveProjectAccessDeniedReason =
@@ -50,6 +51,7 @@ export type DriveProjectLinkParseError =
   | 'empty'
   | 'folder-link'
   | 'invalid-file-id'
+  | 'invalid-resource-key'
   | 'missing-file-id'
   | 'unsupported-host'
 
@@ -57,6 +59,7 @@ export type DriveProjectLinkParseResult =
   | {
       ok: true
       fileId: string
+      resourceKey?: string
       source: DriveProjectLinkSource
     }
   | {
