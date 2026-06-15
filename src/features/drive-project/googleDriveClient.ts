@@ -8,6 +8,7 @@ const GOOGLE_IDENTITY_SCRIPT_URL = 'https://accounts.google.com/gsi/client'
 const GOOGLE_DRIVE_API_BASE_URL = 'https://www.googleapis.com/drive/v3'
 const GOOGLE_DRIVE_PROJECT_FIELDS =
   'id,name,mimeType,resourceKey,version,modifiedTime,headRevisionId,capabilities(canDownload,canEdit,canModifyContent)'
+const GOOGLE_IDENTITY_SCRIPT_LOAD_TIMEOUT_MS = 30_000
 const GOOGLE_TOKEN_REQUEST_TIMEOUT_MS = 120_000
 
 export const GOOGLE_DRIVE_READONLY_SCOPE =
@@ -237,22 +238,17 @@ function loadGoogleIdentityScript(): Promise<void> {
   const scriptPromise = new Promise<void>((resolve, reject) => {
     const existingScript = document.getElementById(GOOGLE_IDENTITY_SCRIPT_ID)
     if (existingScript) {
-      existingScript.addEventListener('load', () => resolve(undefined), {
-        once: true,
-      })
-      existingScript.addEventListener(
-        'error',
-        () => {
-          reject(
-            new GoogleDriveClientError(
-              'google-identity-load-failed',
-              'Google Identity Services script를 불러올 수 없습니다.',
-            ),
-          )
-        },
-        { once: true },
-      )
-      return
+      if (existingScript.dataset.eazyChorusLoadState === 'loaded') {
+        resolve(undefined)
+        return
+      }
+
+      if (existingScript.dataset.eazyChorusLoadState !== 'failed') {
+        bindGoogleIdentityScriptEvents(existingScript, resolve, reject)
+        return
+      }
+
+      existingScript.remove()
     }
 
     const script = document.createElement('script')
@@ -260,14 +256,7 @@ function loadGoogleIdentityScript(): Promise<void> {
     script.src = GOOGLE_IDENTITY_SCRIPT_URL
     script.async = true
     script.defer = true
-    script.onload = () => resolve(undefined)
-    script.onerror = () =>
-      reject(
-        new GoogleDriveClientError(
-          'google-identity-load-failed',
-          'Google Identity Services script를 불러올 수 없습니다.',
-        ),
-      )
+    bindGoogleIdentityScriptEvents(script, resolve, reject)
 
     document.head.append(script)
   }).catch((error) => {
@@ -277,6 +266,55 @@ function loadGoogleIdentityScript(): Promise<void> {
 
   googleIdentityScriptPromise = scriptPromise
   return scriptPromise
+}
+
+function bindGoogleIdentityScriptEvents(
+  script: HTMLElement,
+  resolve: () => void,
+  reject: (reason: GoogleDriveClientError) => void,
+) {
+  let settled = false
+  const timeoutId = window.setTimeout(
+    () => failGoogleIdentityScriptLoad(),
+    GOOGLE_IDENTITY_SCRIPT_LOAD_TIMEOUT_MS,
+  )
+
+  function finish(callback: () => void) {
+    if (settled) {
+      return
+    }
+
+    settled = true
+    window.clearTimeout(timeoutId)
+    callback()
+  }
+
+  function failGoogleIdentityScriptLoad() {
+    finish(() => {
+      script.dataset.eazyChorusLoadState = 'failed'
+      script.remove()
+      reject(
+        new GoogleDriveClientError(
+          'google-identity-load-failed',
+          'Google Identity Services script를 불러올 수 없습니다.',
+        ),
+      )
+    })
+  }
+
+  script.addEventListener(
+    'load',
+    () => {
+      finish(() => {
+        script.dataset.eazyChorusLoadState = 'loaded'
+        resolve()
+      })
+    },
+    { once: true },
+  )
+  script.addEventListener('error', () => failGoogleIdentityScriptLoad(), {
+    once: true,
+  })
 }
 
 function createDriveRequestHeaders(

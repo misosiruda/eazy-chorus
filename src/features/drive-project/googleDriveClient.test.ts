@@ -11,6 +11,7 @@ describe('googleDriveClient', () => {
 
   afterEach(() => {
     window.google = originalGoogle
+    document.getElementById('google-identity-services-script')?.remove()
     vi.useRealTimers()
   })
 
@@ -63,6 +64,35 @@ describe('googleDriveClient', () => {
     await vi.advanceTimersByTimeAsync(120_000)
 
     await rejectionExpectation
+  })
+
+  it('removes a failed Google Identity script before retrying', async () => {
+    window.google = undefined
+
+    const firstTokenRequest = requestGoogleDriveAccessToken({
+      clientId: 'client-id',
+    })
+    const firstScript = document.getElementById('google-identity-services-script')
+    firstScript?.dispatchEvent(new Event('error'))
+
+    await expect(firstTokenRequest).rejects.toMatchObject({
+      reason: 'google-identity-load-failed',
+    })
+    expect(document.getElementById('google-identity-services-script')).toBeNull()
+
+    const secondTokenRequest = requestGoogleDriveAccessToken({
+      clientId: 'client-id',
+    })
+    const secondScript = document.getElementById(
+      'google-identity-services-script',
+    )
+    expect(secondScript).not.toBeNull()
+    expect(secondScript).not.toBe(firstScript)
+    secondScript?.dispatchEvent(new Event('error'))
+
+    await expect(secondTokenRequest).rejects.toMatchObject({
+      reason: 'google-identity-load-failed',
+    })
   })
 
   it('builds a Drive resource key header only when a resource key exists', () => {
