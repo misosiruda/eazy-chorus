@@ -34,6 +34,7 @@ describe('driveSource', () => {
       name: 'song.eazychorus',
       accessMode: 'editor',
       canSaveToDrive: true,
+      sourceMethod: 'shared-link',
       version: '1',
       modifiedTime: '2026-06-15T01:00:00.000Z',
       headRevisionId: 'head-1',

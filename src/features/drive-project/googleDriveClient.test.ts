@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import {
+  GOOGLE_DRIVE_FILE_SCOPE,
   GOOGLE_DRIVE_WRITE_SCOPE,
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
@@ -50,6 +51,12 @@ describe('googleDriveClient', () => {
   it('uses the Drive write scope for user-initiated Drive saves', () => {
     expect(GOOGLE_DRIVE_WRITE_SCOPE).toBe(
       'https://www.googleapis.com/auth/drive',
+    )
+  })
+
+  it('uses the Drive file scope for Picker-selected Drive saves', () => {
+    expect(GOOGLE_DRIVE_FILE_SCOPE).toBe(
+      'https://www.googleapis.com/auth/drive.file',
     )
   })
 

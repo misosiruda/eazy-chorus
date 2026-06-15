@@ -22,10 +22,14 @@ export function createDriveProjectSource({
   access,
   locator,
   metadata,
+  saveScope,
+  sourceMethod,
 }: {
   access: OpenDriveProjectAccess
   locator: DriveProjectFileLocator
   metadata: GoogleDriveProjectFileMetadata
+  saveScope?: string
+  sourceMethod?: DriveProjectSource['sourceMethod']
 }): DriveProjectSource {
   return {
     provider: 'google-drive',
@@ -36,6 +40,8 @@ export function createDriveProjectSource({
     name: metadata.name,
     accessMode: access.mode,
     canSaveToDrive: access.canSaveToDrive,
+    sourceMethod: sourceMethod ?? 'shared-link',
+    saveScope,
     version: metadata.version,
     modifiedTime: metadata.modifiedTime,
     headRevisionId: metadata.headRevisionId,
