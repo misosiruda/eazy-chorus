@@ -10,8 +10,12 @@ import {
 const driveProjectMocks = vi.hoisted(() => ({
   fetchGoogleDriveFileMetadata: vi.fn(),
   isGoogleDriveIdentityReady: vi.fn(() => false),
+  isGoogleDrivePickerReady: vi.fn(() => false),
   openDriveProjectFromLink: vi.fn(),
+  openDriveProjectFromLocator: vi.fn(),
+  pickGoogleDriveProjectFile: vi.fn(),
   preloadGoogleDriveIdentityScript: vi.fn(async () => undefined),
+  preloadGoogleDrivePickerScript: vi.fn(async () => undefined),
   requestGoogleDriveAccessToken: vi.fn(),
   updateGoogleDriveFileContent: vi.fn(),
 }))
@@ -25,9 +29,14 @@ vi.mock('../features/drive-project', async (importOriginal) => {
     fetchGoogleDriveFileMetadata:
       driveProjectMocks.fetchGoogleDriveFileMetadata,
     isGoogleDriveIdentityReady: driveProjectMocks.isGoogleDriveIdentityReady,
+    isGoogleDrivePickerReady: driveProjectMocks.isGoogleDrivePickerReady,
     openDriveProjectFromLink: driveProjectMocks.openDriveProjectFromLink,
+    openDriveProjectFromLocator: driveProjectMocks.openDriveProjectFromLocator,
+    pickGoogleDriveProjectFile: driveProjectMocks.pickGoogleDriveProjectFile,
     preloadGoogleDriveIdentityScript:
       driveProjectMocks.preloadGoogleDriveIdentityScript,
+    preloadGoogleDrivePickerScript:
+      driveProjectMocks.preloadGoogleDrivePickerScript,
     requestGoogleDriveAccessToken:
       driveProjectMocks.requestGoogleDriveAccessToken,
     updateGoogleDriveFileContent:
@@ -172,9 +181,17 @@ describe('HomePage', () => {
     driveProjectMocks.fetchGoogleDriveFileMetadata.mockReset()
     driveProjectMocks.isGoogleDriveIdentityReady.mockReset()
     driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(false)
+    driveProjectMocks.isGoogleDrivePickerReady.mockReset()
+    driveProjectMocks.isGoogleDrivePickerReady.mockReturnValue(false)
     driveProjectMocks.openDriveProjectFromLink.mockReset()
+    driveProjectMocks.openDriveProjectFromLocator.mockReset()
+    driveProjectMocks.pickGoogleDriveProjectFile.mockReset()
     driveProjectMocks.preloadGoogleDriveIdentityScript.mockReset()
     driveProjectMocks.preloadGoogleDriveIdentityScript.mockResolvedValue(
+      undefined,
+    )
+    driveProjectMocks.preloadGoogleDrivePickerScript.mockReset()
+    driveProjectMocks.preloadGoogleDrivePickerScript.mockResolvedValue(
       undefined,
     )
     driveProjectMocks.requestGoogleDriveAccessToken.mockReset()
@@ -208,6 +225,7 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
     expect(screen.getByLabelText('Google Drive 공유 링크')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Drive 열기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Drive 선택' })).toBeDisabled()
     expect(
       screen.getByRole('heading', { name: 'Project Meta' }),
     ).toBeInTheDocument()
@@ -388,6 +406,100 @@ describe('HomePage', () => {
         accessToken: 'write-token',
         content: expect.any(Blob),
         locator: { fileId: '1AbC_def-GHIjkl' },
+      },
+    )
+  })
+
+  it('opens a Picker-selected Drive project and saves it with per-file scope', async () => {
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
+    vi.stubEnv('VITE_GOOGLE_PICKER_API_KEY', 'picker-api-key')
+    vi.stubEnv('VITE_GOOGLE_PICKER_APP_ID', '1234567890')
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
+    driveProjectMocks.isGoogleDrivePickerReady.mockReturnValue(true)
+    driveProjectMocks.requestGoogleDriveAccessToken
+      .mockResolvedValueOnce({ accessToken: 'picker-token' })
+      .mockResolvedValueOnce({ accessToken: 'picker-save-token' })
+    driveProjectMocks.pickGoogleDriveProjectFile.mockResolvedValue({
+      fileId: '1AbC_def-GHIjkl',
+      name: 'drive-song.eazychorus',
+      resourceKey: '0-PickerKey',
+    })
+    const pickerOpenResult = await createDriveOpenResult('editor')
+    driveProjectMocks.openDriveProjectFromLocator.mockResolvedValue({
+      ...pickerOpenResult,
+      locator: {
+        fileId: '1AbC_def-GHIjkl',
+        resourceKey: '0-PickerKey',
+      },
+      metadata: {
+        ...pickerOpenResult.metadata,
+        resourceKey: '0-PickerKey',
+      },
+    })
+    driveProjectMocks.fetchGoogleDriveFileMetadata.mockResolvedValue({
+      ...createEditableDriveMetadata('1'),
+      resourceKey: '0-PickerKey',
+    })
+    driveProjectMocks.updateGoogleDriveFileContent.mockResolvedValue({
+      ...createEditableDriveMetadata('2'),
+      resourceKey: '0-PickerKey',
+    })
+    const user = userEvent.setup()
+
+    renderHomePage()
+
+    await user.click(screen.getByRole('button', { name: 'Drive 선택' }))
+
+    expect(
+      driveProjectMocks.requestGoogleDriveAccessToken,
+    ).toHaveBeenCalledWith({
+      clientId: 'google-client-id',
+      scope: 'https://www.googleapis.com/auth/drive.file',
+    })
+    expect(driveProjectMocks.pickGoogleDriveProjectFile).toHaveBeenCalledWith({
+      accessToken: 'picker-token',
+      appId: '1234567890',
+      developerKey: 'picker-api-key',
+    })
+    expect(driveProjectMocks.openDriveProjectFromLocator).toHaveBeenCalledWith({
+      accessToken: 'picker-token',
+      locator: {
+        fileId: '1AbC_def-GHIjkl',
+        resourceKey: '0-PickerKey',
+      },
+    })
+    await screen.findByText(
+      'Google Drive에서 drive-song.eazychorus 프로젝트를 선택해 열었습니다. 편집 권한입니다.',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
+
+    expect(
+      await screen.findByText('Google Drive에 프로젝트를 저장했습니다.'),
+    ).toBeInTheDocument()
+    expect(
+      driveProjectMocks.requestGoogleDriveAccessToken,
+    ).toHaveBeenLastCalledWith({
+      clientId: 'google-client-id',
+      scope: 'https://www.googleapis.com/auth/drive.file',
+    })
+    expect(driveProjectMocks.fetchGoogleDriveFileMetadata).toHaveBeenCalledWith(
+      {
+        accessToken: 'picker-save-token',
+        locator: {
+          fileId: '1AbC_def-GHIjkl',
+          resourceKey: '0-PickerKey',
+        },
+      },
+    )
+    expect(driveProjectMocks.updateGoogleDriveFileContent).toHaveBeenCalledWith(
+      {
+        accessToken: 'picker-save-token',
+        content: expect.any(Blob),
+        locator: {
+          fileId: '1AbC_def-GHIjkl',
+          resourceKey: '0-PickerKey',
+        },
       },
     )
   })
