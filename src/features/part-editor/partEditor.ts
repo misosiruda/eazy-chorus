@@ -30,6 +30,11 @@ type PartMarkAnnotationOptions = PartMarkToggleOptions & {
   note: string
 }
 
+type PartMarkAnnotationNoteUpdateOptions = {
+  markId: string
+  note: string
+}
+
 type TextRange = {
   startChar: number
   endChar: number
@@ -182,6 +187,30 @@ export function upsertPartMarkAnnotation(
         note: normalizedNote,
       },
     ],
+  }
+}
+
+export function updatePartMarkAnnotationNote(
+  project: EazyChorusProject,
+  { markId, note }: PartMarkAnnotationNoteUpdateOptions,
+): EazyChorusProject {
+  const normalizedNote = note.trim()
+  if (normalizedNote.length === 0) {
+    return project
+  }
+
+  const existingMark = project.partMarks.find(
+    (mark) => mark.id === markId && isAnnotationPartMark(mark),
+  )
+  if (!existingMark || existingMark.note === normalizedNote) {
+    return project
+  }
+
+  return {
+    ...project,
+    partMarks: project.partMarks.map((mark) =>
+      mark.id === existingMark.id ? { ...mark, note: normalizedNote } : mark,
+    ),
   }
 }
 

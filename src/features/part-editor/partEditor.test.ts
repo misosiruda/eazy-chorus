@@ -3,6 +3,7 @@ import {
   splitSegmentTextByPartMarks,
   togglePartMark,
   upsertPartMarkAnnotation,
+  updatePartMarkAnnotationNote,
   updateCueSegmentRole,
 } from './partEditor'
 
@@ -111,6 +112,50 @@ describe('part-editor feature', () => {
         note: '첫 호흡을 길게',
       }),
     )
+  })
+
+  it('updates a duplicate-range note by mark id', () => {
+    const project = {
+      ...createProjectWithCue(),
+      partMarks: [
+        {
+          id: 'note-1',
+          cueId: 'cue-1',
+          segmentId: 'seg-1',
+          partId: 'main-vocal',
+          startChar: 0,
+          endChar: 3,
+          style: 'highlight' as const,
+          note: '첫번째 주석',
+        },
+        {
+          id: 'note-2',
+          cueId: 'cue-1',
+          segmentId: 'seg-1',
+          partId: 'main-vocal',
+          startChar: 0,
+          endChar: 3,
+          style: 'highlight' as const,
+          note: '두번째 주석',
+        },
+      ],
+    }
+
+    const updatedProject = updatePartMarkAnnotationNote(project, {
+      markId: 'note-2',
+      note: '두번째 주석 수정',
+    })
+
+    expect(updatedProject.partMarks).toEqual([
+      expect.objectContaining({
+        id: 'note-1',
+        note: '첫번째 주석',
+      }),
+      expect.objectContaining({
+        id: 'note-2',
+        note: '두번째 주석 수정',
+      }),
+    ])
   })
 
   it('keeps annotation marks separate from visual Part Mark toggles', () => {
