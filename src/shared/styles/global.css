@@ -1559,7 +1559,6 @@ label {
   align-items: center;
   gap: 4px;
   margin-left: 5px;
-  cursor: help;
   line-height: 1;
   vertical-align: text-top;
 }
@@ -1569,11 +1568,25 @@ label {
   display: inline-block;
   width: 0.98rem;
   height: 0.78rem;
+  padding: 0;
   border: 2px solid var(--part-note-color, #38bdf8);
   border-radius: 5px;
   background: #f8fafc;
   background: color-mix(in srgb, var(--part-note-color, #38bdf8) 18%, #f8fafc);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
+}
+
+button.part-mark-note-indicator {
+  appearance: none;
+  cursor: pointer;
+}
+
+button.part-mark-note-indicator:hover,
+button.part-mark-note-indicator:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(37, 99, 235, 0.22),
+    0 1px 3px rgba(15, 23, 42, 0.28);
 }
 
 .part-mark-note-indicator::after {
@@ -1844,6 +1857,22 @@ label {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.preview-annotation-dialog-actions-edit {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.preview-annotation-delete {
+  border-color: #b91c1c;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.preview-annotation-delete:hover:not(:disabled) {
+  border-color: #991b1b;
+  background: #fee2e2;
+  color: #7f1d1d;
 }
 
 .preview-annotation-dialog-actions button[type='submit'] {
