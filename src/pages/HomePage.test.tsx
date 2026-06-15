@@ -369,6 +369,9 @@ describe('HomePage', () => {
     await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
 
     expect(
+      await screen.findByText('Google Drive에 프로젝트를 저장했습니다.'),
+    ).toBeInTheDocument()
+    expect(
       driveProjectMocks.requestGoogleDriveAccessToken,
     ).toHaveBeenCalledWith({
       clientId: 'google-client-id',
@@ -387,9 +390,6 @@ describe('HomePage', () => {
         locator: { fileId: '1AbC_def-GHIjkl' },
       },
     )
-    expect(
-      await screen.findByText('Google Drive에 프로젝트를 저장했습니다.'),
-    ).toBeInTheDocument()
   })
 
   it('blocks Google Drive save when the source revision changed', async () => {
@@ -420,13 +420,16 @@ describe('HomePage', () => {
     await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
 
     expect(
-      driveProjectMocks.updateGoogleDriveFileContent,
-    ).not.toHaveBeenCalled()
-    expect(
       await screen.findByText(
         'Google Drive 원본이 다른 곳에서 변경되었습니다. 다시 열거나 로컬 파일로 저장하세요.',
       ),
     ).toBeInTheDocument()
+    expect(
+      driveProjectMocks.updateGoogleDriveFileContent,
+    ).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole('button', { name: 'Drive에 저장' }),
+    ).not.toBeInTheDocument()
   })
 
   it('blocks Google Drive save when write permission is removed', async () => {
@@ -462,13 +465,13 @@ describe('HomePage', () => {
     await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
 
     expect(
-      driveProjectMocks.updateGoogleDriveFileContent,
-    ).not.toHaveBeenCalled()
-    expect(
       await screen.findByText(
         'Google Drive 편집 권한이 없어 저장할 수 없습니다.',
       ),
     ).toBeInTheDocument()
+    expect(
+      driveProjectMocks.updateGoogleDriveFileContent,
+    ).not.toHaveBeenCalled()
     expect(
       screen.queryByRole('button', { name: 'Drive에 저장' }),
     ).not.toBeInTheDocument()

@@ -2259,13 +2259,10 @@ export function HomePage() {
         latestMetadata,
       )
       if (conflictField) {
-        setDriveProjectSource(
-          createDriveProjectSource({
-            access: latestAccess,
-            locator: latestLocator,
-            metadata: latestMetadata,
-          }),
-        )
+        setDriveProjectSource({
+          ...driveProjectSource,
+          canSaveToDrive: false,
+        })
         setStatusMessage(
           'Google Drive 원본이 다른 곳에서 변경되었습니다. 다시 열거나 로컬 파일로 저장하세요.',
         )
