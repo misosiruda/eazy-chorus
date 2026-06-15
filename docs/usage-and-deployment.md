@@ -22,6 +22,21 @@ Eazy Chorus는 GitHub Pages에서 정적 프론트엔드로 배포한다.
 - Main/Sub segment role
 - highlight, line-above, line-below Part Mark
 
+## Google Drive 프로젝트 열기
+
+Project File 섹션에서는 로컬 파일 외에 Google Drive 프로젝트를 열 수 있다.
+
+- `Drive 열기`: 공유 링크를 붙여 넣어 `.eazychorus` 파일을 연다.
+- `Drive 선택`: Google Picker에서 Drive 파일을 직접 선택해 연다.
+
+Drive 파일의 권한에 따라 앱 모드가 달라진다.
+
+- 편집 권한이 있으면 Editor로 열리고 `Drive에 저장`을 사용할 수 있다.
+- 다운로드만 가능하거나 보기 전용이면 Practice Viewer로 열린다.
+- 다운로드 권한이 없으면 파일을 열 수 없다.
+
+Google Drive 설정, OAuth scope, Google Cloud 환경 변수는 [Google Drive 연동](./google-drive.md)에 정리한다.
+
 ## 로컬 실행
 
 ```powershell
