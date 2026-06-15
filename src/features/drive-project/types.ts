@@ -10,10 +10,16 @@ export type GoogleDriveProjectFileMetadata = {
   id: string
   name: string
   mimeType?: string
+  resourceKey?: string
   version?: string
   modifiedTime?: string
   headRevisionId?: string
   capabilities?: GoogleDriveFileCapabilities
+}
+
+export type DriveProjectFileLocator = {
+  fileId: string
+  resourceKey?: string
 }
 
 export type DriveProjectAccessReason =
