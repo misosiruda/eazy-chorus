@@ -44,6 +44,7 @@ import {
   splitSegmentTextByPartMarks,
   togglePartMark,
   upsertPartMarkAnnotation,
+  updatePartMarkAnnotationNote,
   type PartMarkTextFragment,
 } from '../features/part-editor'
 import {
@@ -1012,6 +1013,21 @@ export function HomePage() {
         setPendingPreviewAnnotation(null)
         return
       }
+
+      const nextProject = updatePartMarkAnnotationNote(project, {
+        markId: editingMark.id,
+        note,
+      })
+      if (nextProject === project) {
+        setPendingPreviewAnnotation(null)
+        return
+      }
+
+      commitLaneEditorProject(nextProject, `${part.name} 주석을 수정했습니다.`)
+      setSelectedCueId(editingMark.cueId)
+      setViewerFocusedPartId(part.id)
+      setPendingPreviewAnnotation(null)
+      return
     }
 
     const nextProject = pendingPreviewAnnotation.targets.reduce(
@@ -1033,9 +1049,7 @@ export function HomePage() {
 
     commitLaneEditorProject(
       nextProject,
-      pendingPreviewAnnotation.mode === 'edit'
-        ? `${part.name} 주석을 수정했습니다.`
-        : `${part.name} 주석 ${pendingPreviewAnnotation.targets.length}개를 저장했습니다.`,
+      `${part.name} 주석 ${pendingPreviewAnnotation.targets.length}개를 저장했습니다.`,
     )
     setSelectedCueId(pendingPreviewAnnotation.targets[0].cueId)
     setViewerFocusedPartId(part.id)
