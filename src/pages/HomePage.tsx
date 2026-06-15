@@ -17,10 +17,18 @@ import {
 } from '../features/audio-engine'
 import {
   DriveProjectOpenError,
+  GOOGLE_DRIVE_WRITE_SCOPE,
   GoogleDriveClientError,
+  createDriveProjectSource,
+  fetchGoogleDriveFileMetadata,
+  getDriveProjectSourceConflictField,
   isGoogleDriveIdentityReady,
   openDriveProjectFromLink,
   preloadGoogleDriveIdentityScript,
+  requestGoogleDriveAccessToken,
+  resolveDriveProjectAccess,
+  updateGoogleDriveFileContent,
+  type DriveProjectSource,
 } from '../features/drive-project'
 import {
   countExportedLines,
@@ -191,6 +199,8 @@ export function HomePage() {
   const [statusMessage, setStatusMessage] =
     useState('새 프로젝트가 준비되었습니다.')
   const [driveProjectLink, setDriveProjectLink] = useState('')
+  const [driveProjectSource, setDriveProjectSource] =
+    useState<DriveProjectSource | null>(null)
   const [isGoogleDriveIdentityLoaded, setIsGoogleDriveIdentityLoaded] =
     useState(() => isGoogleDriveIdentityReady())
   const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
@@ -216,6 +226,7 @@ export function HomePage() {
     },
   )
   const [isExporting, setIsExporting] = useState(false)
+  const [isSavingDriveProject, setIsSavingDriveProject] = useState(false)
   const [isProjectFileBusy, setIsProjectFileBusy] = useState(false)
   const [projectFileBusyMessage, setProjectFileBusyMessage] = useState(
     '프로젝트 파일을 처리하는 중입니다.',
@@ -402,8 +413,10 @@ export function HomePage() {
       ),
     }))
     .filter((group) => group.tracks.length > 0)
-  const exportDisabled = isExporting || hasValidationErrors(validationIssues)
   const isEditorMode = workspaceMode === 'editor'
+  const exportDisabled = isExporting || hasValidationErrors(validationIssues)
+  const canSaveCurrentProjectToDrive =
+    isEditorMode && driveProjectSource?.canSaveToDrive === true
   const isEditorNotesStep = isEditorMode && editorWizardStep === 'notes'
   const isViewerSurfaceVisible =
     !isEditorMode || editorWizardStep === 'preview' || isEditorNotesStep
@@ -765,6 +778,7 @@ export function HomePage() {
     audioEngineRef.current?.stop()
     setProject(nextProject)
     setMediaFiles({})
+    setDriveProjectSource(null)
     setSelectedPartId(nextProject.parts[0]?.id ?? '')
     setNewPartName('')
     setImportIssues([])
@@ -2037,7 +2051,10 @@ export function HomePage() {
     setIsAutoScrollPaused(false)
   }
 
-  async function handleImportFile(file: File | undefined): Promise<boolean> {
+  async function handleImportFile(
+    file: File | undefined,
+    options: { driveProjectSource?: DriveProjectSource | null } = {},
+  ): Promise<boolean> {
     if (!file) {
       return false
     }
@@ -2060,6 +2077,7 @@ export function HomePage() {
       audioEngineRef.current?.stop()
       setProject(result.package.project)
       setMediaFiles(result.package.mediaFiles)
+      setDriveProjectSource(options.driveProjectSource ?? null)
       setSelectedPartId(result.package.project.parts[0]?.id ?? '')
       setNewLanePartId(result.package.project.parts[0]?.id ?? '')
       setSelectedLaneId(result.package.project.lyricLanes[0]?.id ?? '')
@@ -2106,7 +2124,13 @@ export function HomePage() {
         clientId: googleDriveClientId,
         link,
       })
-      const didImport = await handleImportFile(result.file)
+      const didImport = await handleImportFile(result.file, {
+        driveProjectSource: createDriveProjectSource({
+          access: result.access,
+          locator: result.locator,
+          metadata: result.metadata,
+        }),
+      })
       if (!didImport) {
         return
       }
@@ -2176,6 +2200,112 @@ export function HomePage() {
       )
     } finally {
       setIsExporting(false)
+      setIsProjectFileBusy(false)
+    }
+  }
+
+  async function saveCurrentProjectToDrive() {
+    if (!driveProjectSource?.canSaveToDrive) {
+      setStatusMessage('Google Drive에 저장할 수 있는 원본이 없습니다.')
+      return
+    }
+
+    if (!googleDriveClientId) {
+      setStatusMessage('Google Drive 로그인을 사용할 수 없습니다.')
+      return
+    }
+
+    if (!isGoogleDriveIdentityLoaded) {
+      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
+      return
+    }
+
+    setIsSavingDriveProject(true)
+    setProjectFileBusyMessage('Google Drive에 프로젝트를 저장하는 중입니다.')
+    setIsProjectFileBusy(true)
+
+    try {
+      const token = await requestGoogleDriveAccessToken({
+        clientId: googleDriveClientId,
+        scope: GOOGLE_DRIVE_WRITE_SCOPE,
+      })
+      const latestLocator = driveProjectSource.locator
+      const latestMetadata = await fetchGoogleDriveFileMetadata({
+        accessToken: token.accessToken,
+        locator: latestLocator,
+      })
+      const latestAccess = resolveDriveProjectAccess(
+        latestMetadata.capabilities,
+      )
+
+      if (!latestAccess.canOpen || !latestAccess.canSaveToDrive) {
+        if (latestAccess.canOpen) {
+          setDriveProjectSource(
+            createDriveProjectSource({
+              access: latestAccess,
+              locator: latestLocator,
+              metadata: latestMetadata,
+            }),
+          )
+        } else {
+          setDriveProjectSource(null)
+        }
+        setStatusMessage('Google Drive 편집 권한이 없어 저장할 수 없습니다.')
+        return
+      }
+
+      const conflictField = getDriveProjectSourceConflictField(
+        driveProjectSource,
+        latestMetadata,
+      )
+      if (conflictField) {
+        setDriveProjectSource(
+          createDriveProjectSource({
+            access: latestAccess,
+            locator: latestLocator,
+            metadata: latestMetadata,
+          }),
+        )
+        setStatusMessage(
+          'Google Drive 원본이 다른 곳에서 변경되었습니다. 다시 열거나 로컬 파일로 저장하세요.',
+        )
+        return
+      }
+
+      const projectToSave = touchProject(project)
+      const content = await exportProjectPackage({
+        project: projectToSave,
+        mediaFiles,
+      })
+      const updatedMetadata = await updateGoogleDriveFileContent({
+        accessToken: token.accessToken,
+        content,
+        locator: {
+          fileId: latestLocator.fileId,
+          resourceKey: latestLocator.resourceKey ?? latestMetadata.resourceKey,
+        },
+      })
+      const updatedAccess = resolveDriveProjectAccess(
+        updatedMetadata.capabilities,
+      )
+
+      setProject(projectToSave)
+      setDriveProjectSource(
+        createDriveProjectSource({
+          access: updatedAccess.canOpen ? updatedAccess : latestAccess,
+          locator: {
+            fileId: latestLocator.fileId,
+            resourceKey:
+              latestLocator.resourceKey ?? latestMetadata.resourceKey,
+          },
+          metadata: updatedMetadata,
+        }),
+      )
+      setStatusMessage('Google Drive에 프로젝트를 저장했습니다.')
+    } catch (error) {
+      setStatusMessage(getGoogleDriveProjectSaveErrorMessage(error))
+    } finally {
+      setIsSavingDriveProject(false)
       setIsProjectFileBusy(false)
     }
   }
@@ -4089,6 +4219,20 @@ export function HomePage() {
                 >
                   Drive 열기
                 </button>
+                {canSaveCurrentProjectToDrive ? (
+                  <button
+                    type="button"
+                    onClick={() => void saveCurrentProjectToDrive()}
+                    disabled={
+                      exportDisabled ||
+                      isProjectFileBusy ||
+                      !googleDriveClientId ||
+                      !isGoogleDriveIdentityLoaded
+                    }
+                  >
+                    {isSavingDriveProject ? 'Drive 저장 중' : 'Drive에 저장'}
+                  </button>
+                ) : null}
                 {!googleDriveClientId ? (
                   <p className="workspace-drive-status">
                     Google Drive 로그인 설정 필요
@@ -4096,6 +4240,10 @@ export function HomePage() {
                 ) : !isGoogleDriveIdentityLoaded ? (
                   <p className="workspace-drive-status">
                     Google Drive 로그인 준비 중
+                  </p>
+                ) : driveProjectSource ? (
+                  <p className="workspace-drive-status">
+                    {driveProjectSource.name}
                   </p>
                 ) : null}
               </form>
@@ -5754,6 +5902,26 @@ function getGoogleDriveProjectOpenErrorMessage(error: unknown): string {
   }
 
   return 'Google Drive 프로젝트를 열 수 없습니다.'
+}
+
+function getGoogleDriveProjectSaveErrorMessage(error: unknown): string {
+  if (error instanceof GoogleDriveClientError) {
+    if (
+      error.reason === 'google-identity-load-failed' ||
+      error.reason === 'google-identity-unavailable' ||
+      error.reason === 'oauth-error'
+    ) {
+      return 'Google 로그인을 완료할 수 없습니다.'
+    }
+
+    if (error.reason === 'metadata-request-failed') {
+      return 'Google Drive 파일 정보를 다시 확인할 수 없습니다.'
+    }
+
+    return 'Google Drive에 프로젝트를 저장할 수 없습니다.'
+  }
+
+  return 'Google Drive에 프로젝트를 저장할 수 없습니다.'
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
