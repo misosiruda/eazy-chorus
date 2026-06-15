@@ -22,6 +22,17 @@ export type DriveProjectFileLocator = {
   resourceKey?: string
 }
 
+export type DriveProjectSource = {
+  provider: 'google-drive'
+  locator: DriveProjectFileLocator
+  name: string
+  accessMode: DriveProjectAccessMode
+  canSaveToDrive: boolean
+  version?: string
+  modifiedTime?: string
+  headRevisionId?: string
+}
+
 export type DriveProjectAccessReason =
   | 'can-modify-content'
   | 'can-edit'

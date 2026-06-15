@@ -13,6 +13,7 @@ const GOOGLE_TOKEN_REQUEST_TIMEOUT_MS = 120_000
 
 export const GOOGLE_DRIVE_READONLY_SCOPE =
   'https://www.googleapis.com/auth/drive.readonly'
+export const GOOGLE_DRIVE_WRITE_SCOPE = 'https://www.googleapis.com/auth/drive'
 
 type GoogleTokenResponse = {
   access_token?: string
@@ -61,6 +62,9 @@ export type GoogleDriveClientErrorReason =
   | 'google-identity-unavailable'
   | 'metadata-request-failed'
   | 'oauth-error'
+  | 'upload-request-failed'
+  | 'upload-session-missing-location'
+  | 'upload-session-request-failed'
 
 export class GoogleDriveClientError extends Error {
   readonly reason: GoogleDriveClientErrorReason
@@ -222,6 +226,65 @@ export async function downloadGoogleDriveFile({
   return response.blob()
 }
 
+export async function updateGoogleDriveFileContent({
+  accessToken,
+  content,
+  fetchImpl = fetch,
+  locator,
+}: {
+  accessToken: string
+  content: Blob
+  fetchImpl?: typeof fetch
+  locator: DriveProjectFileLocator
+}): Promise<GoogleDriveProjectFileMetadata> {
+  const uploadContentType = content.type || 'application/zip'
+  const sessionResponse = await fetchImpl(
+    createDriveFileResumableUpdateUrl(locator.fileId),
+    {
+      method: 'PATCH',
+      headers: {
+        ...createDriveRequestHeaders(accessToken, locator),
+        'X-Upload-Content-Length': String(content.size),
+        'X-Upload-Content-Type': uploadContentType,
+      },
+    },
+  )
+
+  if (!sessionResponse.ok) {
+    throw new GoogleDriveClientError(
+      'upload-session-request-failed',
+      'Google Drive 업로드 세션을 만들 수 없습니다.',
+      sessionResponse.status,
+    )
+  }
+
+  const uploadUrl = sessionResponse.headers.get('Location')
+  if (!uploadUrl) {
+    throw new GoogleDriveClientError(
+      'upload-session-missing-location',
+      'Google Drive 업로드 세션 위치를 확인할 수 없습니다.',
+    )
+  }
+
+  const uploadResponse = await fetchImpl(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': uploadContentType,
+    },
+    body: content,
+  })
+
+  if (!uploadResponse.ok) {
+    throw new GoogleDriveClientError(
+      'upload-request-failed',
+      'Google Drive 파일을 업로드할 수 없습니다.',
+      uploadResponse.status,
+    )
+  }
+
+  return (await uploadResponse.json()) as GoogleDriveProjectFileMetadata
+}
+
 export function createDriveResourceKeyHeader(
   locator: DriveProjectFileLocator,
 ): string | null {
@@ -353,5 +416,17 @@ function createDriveFileDownloadUrl(fileId: string): URL {
   )
   url.searchParams.set('alt', 'media')
   url.searchParams.set('supportsAllDrives', 'true')
+  return url
+}
+
+function createDriveFileResumableUpdateUrl(fileId: string): URL {
+  const url = new URL(
+    `https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(
+      fileId,
+    )}`,
+  )
+  url.searchParams.set('uploadType', 'resumable')
+  url.searchParams.set('supportsAllDrives', 'true')
+  url.searchParams.set('fields', GOOGLE_DRIVE_PROJECT_FIELDS)
   return url
 }

@@ -4,6 +4,7 @@ export {
 } from './driveAccess'
 export {
   GOOGLE_DRIVE_READONLY_SCOPE,
+  GOOGLE_DRIVE_WRITE_SCOPE,
   GoogleDriveClientError,
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
@@ -11,9 +12,15 @@ export {
   isGoogleDriveIdentityReady,
   preloadGoogleDriveIdentityScript,
   requestGoogleDriveAccessToken,
+  updateGoogleDriveFileContent,
   type GoogleDriveAccessToken,
   type GoogleDriveClientErrorReason,
 } from './googleDriveClient'
+export {
+  createDriveProjectSource,
+  getDriveProjectSourceConflictField,
+  type DriveProjectSourceConflictField,
+} from './driveSource'
 export {
   isValidDriveFileId,
   isValidDriveResourceKey,
@@ -35,6 +42,7 @@ export type {
   DriveProjectLinkParseError,
   DriveProjectLinkParseResult,
   DriveProjectLinkSource,
+  DriveProjectSource,
   GoogleDriveFileCapabilities,
   GoogleDriveProjectFileMetadata,
 } from './types'
