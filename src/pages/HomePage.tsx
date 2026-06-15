@@ -4,7 +4,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
 } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   AudioPlaybackEngine,
   createMediaFilePathSet,
@@ -15,6 +15,13 @@ import {
   updateProjectWithDecodedDurations,
   type TrackDecodeResult,
 } from '../features/audio-engine'
+import {
+  DriveProjectOpenError,
+  GoogleDriveClientError,
+  isGoogleDriveIdentityReady,
+  openDriveProjectFromLink,
+  preloadGoogleDriveIdentityScript,
+} from '../features/drive-project'
 import {
   countExportedLines,
   createLyricDraftLines,
@@ -168,6 +175,7 @@ type LaneEditorHistory = {
 
 export function HomePage() {
   const location = useLocation()
+  const navigate = useNavigate()
   const workspaceMode: WorkspaceMode = location.pathname.startsWith('/practice')
     ? 'practice'
     : 'editor'
@@ -182,6 +190,9 @@ export function HomePage() {
   const [newPartName, setNewPartName] = useState('')
   const [statusMessage, setStatusMessage] =
     useState('새 프로젝트가 준비되었습니다.')
+  const [driveProjectLink, setDriveProjectLink] = useState('')
+  const [isGoogleDriveIdentityLoaded, setIsGoogleDriveIdentityLoaded] =
+    useState(() => isGoogleDriveIdentityReady())
   const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
@@ -251,6 +262,8 @@ export function HomePage() {
   const validationWarnings = validationIssues.filter(
     (issue) => issue.severity === 'warning',
   )
+  const googleDriveClientId =
+    import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? ''
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const selectedPart =
     project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
@@ -516,6 +529,36 @@ export function HomePage() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   })
+
+  useEffect(() => {
+    if (!googleDriveClientId || isGoogleDriveIdentityReady()) {
+      return
+    }
+
+    let isMounted = true
+    void preloadGoogleDriveIdentityScript()
+      .then(() => {
+        if (!isMounted) {
+          return
+        }
+
+        setIsGoogleDriveIdentityLoaded(true)
+      })
+      .catch(() => {
+        if (!isMounted) {
+          return
+        }
+
+        setIsGoogleDriveIdentityLoaded(false)
+        setStatusMessage(
+          'Google Drive 로그인을 준비할 수 없습니다. 네트워크 또는 브라우저 설정을 확인하세요.',
+        )
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [googleDriveClientId])
 
   useEffect(() => {
     if (!pendingPreviewAnnotation) {
@@ -1994,9 +2037,9 @@ export function HomePage() {
     setIsAutoScrollPaused(false)
   }
 
-  async function handleImportFile(file: File | undefined) {
+  async function handleImportFile(file: File | undefined): Promise<boolean> {
     if (!file) {
-      return
+      return false
     }
 
     setPendingPreviewAnnotation(null)
@@ -2011,7 +2054,7 @@ export function HomePage() {
         setStatusMessage(
           '프로젝트 파일을 열 수 없습니다. validation error를 확인하세요.',
         )
-        return
+        return false
       }
 
       audioEngineRef.current?.stop()
@@ -2036,6 +2079,50 @@ export function HomePage() {
       setViewerCueLoopId(null)
       setIsAutoScrollPaused(false)
       setStatusMessage(`${file.name} 프로젝트를 열었습니다.`)
+      return true
+    } finally {
+      setIsProjectFileBusy(false)
+    }
+  }
+
+  async function openGoogleDriveProject() {
+    const link = driveProjectLink.trim()
+    if (!link) {
+      setStatusMessage('Google Drive 공유 링크를 입력하세요.')
+      return
+    }
+
+    if (!isGoogleDriveIdentityLoaded) {
+      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
+      return
+    }
+
+    setPendingPreviewAnnotation(null)
+    setProjectFileBusyMessage('Google Drive 프로젝트를 여는 중입니다.')
+    setIsProjectFileBusy(true)
+
+    try {
+      const result = await openDriveProjectFromLink({
+        clientId: googleDriveClientId,
+        link,
+      })
+      const didImport = await handleImportFile(result.file)
+      if (!didImport) {
+        return
+      }
+
+      const nextPath = result.access.mode === 'editor' ? '/editor' : '/practice'
+      navigate(nextPath)
+      setStatusMessage(
+        `Google Drive에서 ${result.metadata.name} 프로젝트를 열었습니다. ${
+          result.access.mode === 'editor'
+            ? '편집 권한입니다.'
+            : '보기 전용입니다.'
+        }`,
+      )
+    } catch (error) {
+      setImportIssues([])
+      setStatusMessage(getGoogleDriveProjectOpenErrorMessage(error))
     } finally {
       setIsProjectFileBusy(false)
     }
@@ -3969,6 +4056,49 @@ export function HomePage() {
                   }}
                 />
               </div>
+              <form
+                className="workspace-drive-form"
+                aria-label="Google Drive 프로젝트 열기"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void openGoogleDriveProject()
+                }}
+              >
+                <label
+                  className="visually-hidden"
+                  htmlFor="google-drive-project-link"
+                >
+                  Google Drive 공유 링크
+                </label>
+                <input
+                  id="google-drive-project-link"
+                  type="text"
+                  value={driveProjectLink}
+                  placeholder="Google Drive 공유 링크"
+                  onChange={(event) => setDriveProjectLink(event.target.value)}
+                  disabled={isProjectFileBusy}
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    isProjectFileBusy ||
+                    !driveProjectLink.trim() ||
+                    !googleDriveClientId ||
+                    !isGoogleDriveIdentityLoaded
+                  }
+                >
+                  Drive 열기
+                </button>
+                {!googleDriveClientId ? (
+                  <p className="workspace-drive-status">
+                    Google Drive 로그인 설정 필요
+                  </p>
+                ) : !isGoogleDriveIdentityLoaded ? (
+                  <p className="workspace-drive-status">
+                    Google Drive 로그인 준비 중
+                  </p>
+                ) : null}
+              </form>
             </section>
 
             {editorWizardControls}
@@ -5592,6 +5722,38 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : '오디오 재생 중 알 수 없는 오류가 발생했습니다.'
+}
+
+function getGoogleDriveProjectOpenErrorMessage(error: unknown): string {
+  if (error instanceof DriveProjectOpenError) {
+    if (error.reason === 'missing-google-client-id') {
+      return 'Google Drive 로그인을 사용할 수 없습니다. Google client id 설정을 확인하세요.'
+    }
+
+    if (error.reason === 'invalid-link') {
+      return 'Google Drive 공유 링크를 확인하세요.'
+    }
+
+    if (error.reason === 'unsupported-file') {
+      return 'Google Drive 파일이 .eazychorus 프로젝트가 아닙니다.'
+    }
+
+    return 'Google Drive 파일을 다운로드할 권한이 없습니다.'
+  }
+
+  if (error instanceof GoogleDriveClientError) {
+    if (
+      error.reason === 'google-identity-load-failed' ||
+      error.reason === 'google-identity-unavailable' ||
+      error.reason === 'oauth-error'
+    ) {
+      return 'Google 로그인을 완료할 수 없습니다.'
+    }
+
+    return 'Google Drive 파일을 불러올 수 없습니다.'
+  }
+
+  return 'Google Drive 프로젝트를 열 수 없습니다.'
 }
 
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {

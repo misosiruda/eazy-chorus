@@ -296,6 +296,35 @@ textarea {
   color: #ffffff;
 }
 
+.workspace-drive-form {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-drive-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-drive-form button {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.workspace-drive-form button:hover:not(:disabled) {
+  border-color: #0b5f59;
+  background: #0b5f59;
+  color: #ffffff;
+}
+
+.workspace-drive-status {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .workspace-utility-sidebar {
   position: fixed;
   top: 0;

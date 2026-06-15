@@ -2,6 +2,30 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
+import {
+  createNewProject,
+  exportProjectPackage,
+} from '../features/project-file'
+
+const driveProjectMocks = vi.hoisted(() => ({
+  isGoogleDriveIdentityReady: vi.fn(() => false),
+  openDriveProjectFromLink: vi.fn(),
+  preloadGoogleDriveIdentityScript: vi.fn(async () => undefined),
+}))
+
+vi.mock('../features/drive-project', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../features/drive-project')>()
+
+  return {
+    ...actual,
+    isGoogleDriveIdentityReady: driveProjectMocks.isGoogleDriveIdentityReady,
+    openDriveProjectFromLink: driveProjectMocks.openDriveProjectFromLink,
+    preloadGoogleDriveIdentityScript:
+      driveProjectMocks.preloadGoogleDriveIdentityScript,
+  }
+})
+
 import { HomePage } from './HomePage'
 
 function renderHomePage(initialPath = '/editor') {
@@ -81,7 +105,45 @@ async function assignDraftToLeadLane(user: ReturnType<typeof userEvent.setup>) {
   fireEvent.mouseUp(draftDocument)
 }
 
+async function createDriveOpenResult(mode: 'editor' | 'viewer') {
+  const blob = await exportProjectPackage({
+    project: createNewProject(),
+    mediaFiles: {},
+  })
+
+  return {
+    access: {
+      canOpen: true,
+      canSaveToDrive: mode === 'editor',
+      mode,
+      reason: mode === 'editor' ? 'can-modify-content' : 'download-only',
+    },
+    file: new File([blob], 'drive-song.eazychorus', {
+      type: 'application/zip',
+    }),
+    locator: {
+      fileId: '1AbC_def-GHIjkl',
+    },
+    metadata: {
+      id: '1AbC_def-GHIjkl',
+      name: 'drive-song.eazychorus',
+      capabilities: { canDownload: true },
+    },
+  }
+}
+
 describe('HomePage', () => {
+  afterEach(() => {
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReset()
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(false)
+    driveProjectMocks.openDriveProjectFromLink.mockReset()
+    driveProjectMocks.preloadGoogleDriveIdentityScript.mockReset()
+    driveProjectMocks.preloadGoogleDriveIdentityScript.mockResolvedValue(
+      undefined,
+    )
+    vi.unstubAllEnvs()
+  })
+
   it('renders milestone 1 project file controls as active workspace actions', () => {
     renderHomePage()
 
@@ -106,6 +168,8 @@ describe('HomePage', () => {
     expect(
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
     ).toBeInTheDocument()
+    expect(screen.getByLabelText('Google Drive 공유 링크')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Drive 열기' })).toBeDisabled()
     expect(
       screen.getByRole('heading', { name: 'Project Meta' }),
     ).toBeInTheDocument()
@@ -203,6 +267,36 @@ describe('HomePage', () => {
     )
     expect(
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
+    ).toBeInTheDocument()
+  })
+
+  it('opens a Google Drive viewer project in practice mode', async () => {
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
+    const user = userEvent.setup()
+    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
+      await createDriveOpenResult('viewer'),
+    )
+
+    renderHomePage()
+
+    await user.type(
+      screen.getByLabelText('Google Drive 공유 링크'),
+      'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
+    )
+    await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
+
+    expect(driveProjectMocks.openDriveProjectFromLink).toHaveBeenCalledWith({
+      clientId: 'google-client-id',
+      link: 'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
+    })
+    expect(
+      await screen.findByRole('heading', { name: 'Practice Viewer' }),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        'Google Drive에서 drive-song.eazychorus 프로젝트를 열었습니다. 보기 전용입니다.',
+      ),
     ).toBeInTheDocument()
   })
 
