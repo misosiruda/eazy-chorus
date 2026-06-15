@@ -22,6 +22,8 @@ npm run dev
 
 로컬 dev server에서 앱을 연 뒤 `샘플 열기`를 누르면 포함된 샘플 `.eazychorus` 프로젝트를 바로 불러올 수 있습니다.
 
+Google Drive 공유 링크와 Google Picker를 사용하려면 Google Cloud OAuth client, API key, app id를 설정해야 합니다. 상세 설정은 [Google Drive 연동](./docs/google-drive.md)을 참고합니다.
+
 ## 품질 검증
 
 ```powershell
@@ -65,6 +67,7 @@ npm run sample:project
 - [가사 가져오기 및 편집기](./docs/lyrics-import-and-editor.md)
 - [보기/연습 모드](./docs/viewer-mode.md)
 - [사용법과 배포](./docs/usage-and-deployment.md)
+- [Google Drive 연동](./docs/google-drive.md)
 - [구현 로드맵](./docs/implementation-roadmap.md)
 - [Milestone 0 실행 계획](./docs/milestones/milestone-0-project-bootstrap.md)
 - [Milestone 1 실행 결과](./docs/milestones/milestone-1-file-format-project-io.md)
