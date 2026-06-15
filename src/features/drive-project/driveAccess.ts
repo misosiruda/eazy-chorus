@@ -31,7 +31,7 @@ export function resolveDriveProjectAccess(
     }
   }
 
-  if (capabilities.canModifyContent) {
+  if (capabilities.canModifyContent === true) {
     return {
       canOpen: true,
       mode: 'editor',
@@ -49,7 +49,10 @@ export function resolveDriveProjectAccess(
     }
   }
 
-  if (capabilities.canEdit) {
+  if (
+    capabilities.canEdit === true &&
+    capabilities.canModifyContent !== false
+  ) {
     return {
       canOpen: true,
       mode: 'editor',
