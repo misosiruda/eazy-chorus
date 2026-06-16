@@ -61,7 +61,7 @@ describe('openDriveProjectFromLink', () => {
     })
   })
 
-  it('opens a Drive project from a picked file locator without requesting OAuth', async () => {
+  it('opens a Drive project from a file locator without requesting OAuth', async () => {
     const fetchMock = createDriveFetchMock({
       id: '1AbC_def-GHIjkl',
       name: 'picked-song.eazychorus',
@@ -73,11 +73,11 @@ describe('openDriveProjectFromLink', () => {
     })
 
     const result = await openDriveProjectFromLocator({
-      accessToken: 'picker-token',
+      accessToken: 'access-token',
       fetchImpl: fetchMock,
       locator: {
         fileId: '1AbC_def-GHIjkl',
-        resourceKey: '0-PickerKey',
+        resourceKey: '0-ResourceKey',
       },
     })
 
@@ -85,16 +85,16 @@ describe('openDriveProjectFromLink', () => {
     expect(result.file.name).toBe('picked-song.eazychorus')
     expect(result.locator).toEqual({
       fileId: '1AbC_def-GHIjkl',
-      resourceKey: '0-PickerKey',
+      resourceKey: '0-ResourceKey',
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      Authorization: 'Bearer picker-token',
-      'X-Goog-Drive-Resource-Keys': '1AbC_def-GHIjkl/0-PickerKey',
+      Authorization: 'Bearer access-token',
+      'X-Goog-Drive-Resource-Keys': '1AbC_def-GHIjkl/0-ResourceKey',
     })
     expect(fetchMock.mock.calls[1][1]?.headers).toMatchObject({
-      Authorization: 'Bearer picker-token',
-      'X-Goog-Drive-Resource-Keys': '1AbC_def-GHIjkl/0-PickerKey',
+      Authorization: 'Bearer access-token',
+      'X-Goog-Drive-Resource-Keys': '1AbC_def-GHIjkl/0-ResourceKey',
     })
   })
 

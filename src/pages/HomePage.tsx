@@ -17,21 +17,14 @@ import {
 } from '../features/audio-engine'
 import {
   DriveProjectOpenError,
-  GOOGLE_DRIVE_FILE_SCOPE,
-  GOOGLE_DRIVE_READONLY_SCOPE,
   GOOGLE_DRIVE_WRITE_SCOPE,
   GoogleDriveClientError,
-  GoogleDrivePickerError,
   createDriveProjectSource,
   fetchGoogleDriveFileMetadata,
   getDriveProjectSourceConflictField,
   isGoogleDriveIdentityReady,
-  isGoogleDrivePickerReady,
   openDriveProjectFromLink,
-  openDriveProjectFromLocator,
-  pickGoogleDriveProjectFile,
   preloadGoogleDriveIdentityScript,
-  preloadGoogleDrivePickerScript,
   requestGoogleDriveAccessToken,
   resolveDriveProjectAccess,
   updateGoogleDriveFileContent,
@@ -210,13 +203,6 @@ export function HomePage() {
     useState<DriveProjectSource | null>(null)
   const [isGoogleDriveIdentityLoaded, setIsGoogleDriveIdentityLoaded] =
     useState(() => isGoogleDriveIdentityReady())
-  const [isGoogleDrivePickerLoaded, setIsGoogleDrivePickerLoaded] = useState(
-    () => isGoogleDrivePickerReady(),
-  )
-  const [hasGoogleDriveAuthorization, setHasGoogleDriveAuthorization] =
-    useState(false)
-  const [isGoogleDriveAuthorizing, setIsGoogleDriveAuthorizing] =
-    useState(false)
   const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
@@ -289,18 +275,7 @@ export function HomePage() {
   )
   const googleDriveClientId =
     import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? ''
-  const googleDrivePickerApiKey =
-    import.meta.env.VITE_GOOGLE_PICKER_API_KEY?.trim() ||
-    import.meta.env.VITE_GOOGLE_API_KEY?.trim() ||
-    ''
-  const googleDrivePickerAppId =
-    import.meta.env.VITE_GOOGLE_PICKER_APP_ID?.trim() ||
-    import.meta.env.VITE_GOOGLE_APP_ID?.trim() ||
-    ''
-  const isGoogleDrivePickerConfigured =
-    !!googleDrivePickerApiKey && !!googleDrivePickerAppId
-  const canRequestGoogleDriveAuthorization =
-    !!googleDriveClientId && isGoogleDriveIdentityLoaded
+  const canUseGoogleDrive = !!googleDriveClientId && isGoogleDriveIdentityLoaded
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const selectedPart =
     project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
@@ -598,40 +573,6 @@ export function HomePage() {
       isMounted = false
     }
   }, [googleDriveClientId])
-
-  useEffect(() => {
-    if (!googleDriveClientId || !isGoogleDrivePickerConfigured) {
-      return
-    }
-
-    if (isGoogleDrivePickerReady()) {
-      return
-    }
-
-    let isMounted = true
-    void preloadGoogleDrivePickerScript()
-      .then(() => {
-        if (!isMounted) {
-          return
-        }
-
-        setIsGoogleDrivePickerLoaded(true)
-      })
-      .catch(() => {
-        if (!isMounted) {
-          return
-        }
-
-        setIsGoogleDrivePickerLoaded(false)
-        setStatusMessage(
-          'Google Drive 선택기를 준비할 수 없습니다. 네트워크 또는 브라우저 설정을 확인하세요.',
-        )
-      })
-
-    return () => {
-      isMounted = false
-    }
-  }, [googleDriveClientId, isGoogleDrivePickerConfigured])
 
   useEffect(() => {
     if (!pendingPreviewAnnotation) {
@@ -2189,7 +2130,6 @@ export function HomePage() {
         clientId: googleDriveClientId,
         link,
       })
-      setHasGoogleDriveAuthorization(true)
       const didImport = await handleImportFile(result.file, {
         driveProjectSource: createDriveProjectSource({
           access: result.access,
@@ -2213,80 +2153,6 @@ export function HomePage() {
     } catch (error) {
       setImportIssues([])
       setStatusMessage(getGoogleDriveProjectOpenErrorMessage(error))
-    } finally {
-      setIsProjectFileBusy(false)
-    }
-  }
-
-  async function openGoogleDrivePickerProject() {
-    if (!googleDriveClientId) {
-      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
-      return
-    }
-
-    if (!isGoogleDriveIdentityLoaded) {
-      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
-      return
-    }
-
-    if (!isGoogleDrivePickerConfigured) {
-      setStatusMessage('Google Drive 선택기 설정을 확인하세요.')
-      return
-    }
-
-    if (!isGoogleDrivePickerLoaded) {
-      setStatusMessage('Google Drive 선택기를 준비하는 중입니다.')
-      return
-    }
-
-    setPendingPreviewAnnotation(null)
-    setProjectFileBusyMessage('Google Drive 파일을 선택하는 중입니다.')
-    setIsProjectFileBusy(true)
-
-    try {
-      const token = await requestGoogleDriveAccessToken({
-        clientId: googleDriveClientId,
-        scope: GOOGLE_DRIVE_FILE_SCOPE,
-      })
-      setHasGoogleDriveAuthorization(true)
-      const pickedFile = await pickGoogleDriveProjectFile({
-        accessToken: token.accessToken,
-        appId: googleDrivePickerAppId,
-        developerKey: googleDrivePickerApiKey,
-      })
-      setProjectFileBusyMessage('Google Drive 프로젝트를 여는 중입니다.')
-      const result = await openDriveProjectFromLocator({
-        accessToken: token.accessToken,
-        locator: {
-          fileId: pickedFile.fileId,
-          resourceKey: pickedFile.resourceKey,
-        },
-      })
-      const didImport = await handleImportFile(result.file, {
-        driveProjectSource: createDriveProjectSource({
-          access: result.access,
-          locator: result.locator,
-          metadata: result.metadata,
-          saveScope: GOOGLE_DRIVE_FILE_SCOPE,
-          sourceMethod: 'picker',
-        }),
-      })
-      if (!didImport) {
-        return
-      }
-
-      const nextPath = result.access.mode === 'editor' ? '/editor' : '/practice'
-      navigate(nextPath)
-      setStatusMessage(
-        `Google Drive에서 ${result.metadata.name} 프로젝트를 선택해 열었습니다. ${
-          result.access.mode === 'editor'
-            ? '편집 권한입니다.'
-            : '보기 전용입니다.'
-        }`,
-      )
-    } catch (error) {
-      setImportIssues([])
-      setStatusMessage(getGoogleDriveProjectPickerErrorMessage(error))
     } finally {
       setIsProjectFileBusy(false)
     }
@@ -2369,7 +2235,6 @@ export function HomePage() {
         clientId: googleDriveClientId,
         scope: driveProjectSource.saveScope ?? GOOGLE_DRIVE_WRITE_SCOPE,
       })
-      setHasGoogleDriveAuthorization(true)
       const latestLocator = driveProjectSource.locator
       const latestMetadata = await fetchGoogleDriveFileMetadata({
         accessToken: token.accessToken,
@@ -2448,37 +2313,6 @@ export function HomePage() {
       setStatusMessage(getGoogleDriveProjectSaveErrorMessage(error))
     } finally {
       setIsSavingDriveProject(false)
-      setIsProjectFileBusy(false)
-    }
-  }
-
-  async function connectGoogleDriveAccount() {
-    if (!googleDriveClientId) {
-      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
-      return
-    }
-
-    if (!isGoogleDriveIdentityLoaded) {
-      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
-      return
-    }
-
-    setIsGoogleDriveAuthorizing(true)
-    setProjectFileBusyMessage('Google 계정을 연결하는 중입니다.')
-    setIsProjectFileBusy(true)
-
-    try {
-      await requestGoogleDriveAccessToken({
-        clientId: googleDriveClientId,
-        scope: GOOGLE_DRIVE_READONLY_SCOPE,
-      })
-      setHasGoogleDriveAuthorization(true)
-      setStatusMessage('Google Drive 연결이 준비되었습니다.')
-    } catch (error) {
-      setHasGoogleDriveAuthorization(false)
-      setStatusMessage(getGoogleDriveProjectOpenErrorMessage(error))
-    } finally {
-      setIsGoogleDriveAuthorizing(false)
       setIsProjectFileBusy(false)
     }
   }
@@ -4382,46 +4216,21 @@ export function HomePage() {
                   disabled={isProjectFileBusy}
                 />
                 <button
-                  type="button"
-                  onClick={() => void connectGoogleDriveAccount()}
-                  disabled={
-                    isProjectFileBusy || !canRequestGoogleDriveAuthorization
-                  }
-                >
-                  {isGoogleDriveAuthorizing
-                    ? 'Google 연결 중'
-                    : 'Google로 연결'}
-                </button>
-                <button
                   type="submit"
                   disabled={
                     isProjectFileBusy ||
                     !driveProjectLink.trim() ||
-                    !canRequestGoogleDriveAuthorization
+                    !canUseGoogleDrive
                   }
                 >
                   Drive 열기
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void openGoogleDrivePickerProject()}
-                  disabled={
-                    isProjectFileBusy ||
-                    !canRequestGoogleDriveAuthorization ||
-                    !isGoogleDrivePickerConfigured ||
-                    !isGoogleDrivePickerLoaded
-                  }
-                >
-                  Drive 선택
                 </button>
                 {canSaveCurrentProjectToDrive ? (
                   <button
                     type="button"
                     onClick={() => void saveCurrentProjectToDrive()}
                     disabled={
-                      exportDisabled ||
-                      isProjectFileBusy ||
-                      !canRequestGoogleDriveAuthorization
+                      exportDisabled || isProjectFileBusy || !canUseGoogleDrive
                     }
                   >
                     {isSavingDriveProject ? 'Drive 저장 중' : 'Drive에 저장'}
@@ -4439,18 +4248,6 @@ export function HomePage() {
                   <p className="workspace-drive-status">
                     {driveProjectSource.name}
                   </p>
-                ) : !isGoogleDrivePickerConfigured ? (
-                  <p className="workspace-drive-status">
-                    {hasGoogleDriveAuthorization
-                      ? 'Google Drive 연결됨, Picker 설정 필요'
-                      : 'Google Picker 설정 필요'}
-                  </p>
-                ) : !isGoogleDrivePickerLoaded ? (
-                  <p className="workspace-drive-status">
-                    Google Picker 준비 중
-                  </p>
-                ) : hasGoogleDriveAuthorization ? (
-                  <p className="workspace-drive-status">Google Drive 연결됨</p>
                 ) : (
                   <p className="workspace-drive-status">
                     Google Drive 연결 가능
@@ -6112,22 +5909,6 @@ function getGoogleDriveProjectOpenErrorMessage(error: unknown): string {
   }
 
   return 'Google Drive 프로젝트를 열 수 없습니다.'
-}
-
-function getGoogleDriveProjectPickerErrorMessage(error: unknown): string {
-  if (error instanceof GoogleDrivePickerError) {
-    if (error.reason === 'google-picker-cancelled') {
-      return 'Google Drive 파일 선택을 취소했습니다.'
-    }
-
-    if (error.reason === 'google-picker-missing-config') {
-      return 'Google Drive 선택기 설정을 확인하세요.'
-    }
-
-    return 'Google Drive 선택기를 사용할 수 없습니다.'
-  }
-
-  return getGoogleDriveProjectOpenErrorMessage(error)
 }
 
 function getGoogleDriveProjectSaveErrorMessage(error: unknown): string {

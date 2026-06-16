@@ -22,7 +22,7 @@ export type DriveProjectFileLocator = {
   resourceKey?: string
 }
 
-export type DriveProjectSourceMethod = 'shared-link' | 'picker'
+export type DriveProjectSourceMethod = 'shared-link'
 
 export type DriveProjectSource = {
   provider: 'google-drive'
