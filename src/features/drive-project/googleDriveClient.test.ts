@@ -1,7 +1,7 @@
 import { vi } from 'vitest'
 import {
-  GOOGLE_DRIVE_FILE_SCOPE,
   GOOGLE_DRIVE_WRITE_SCOPE,
+  clearGoogleDriveAccessTokenCacheForTesting,
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
   fetchGoogleDriveFileMetadata,
@@ -16,6 +16,7 @@ describe('googleDriveClient', () => {
 
   afterEach(() => {
     window.google = originalGoogle
+    clearGoogleDriveAccessTokenCacheForTesting()
     document.getElementById('google-identity-services-script')?.remove()
     vi.useRealTimers()
   })
@@ -54,12 +55,6 @@ describe('googleDriveClient', () => {
     )
   })
 
-  it('uses the Drive file scope for Picker-selected Drive saves', () => {
-    expect(GOOGLE_DRIVE_FILE_SCOPE).toBe(
-      'https://www.googleapis.com/auth/drive.file',
-    )
-  })
-
   it('rejects token requests before Google Identity Services is preloaded', async () => {
     window.google = undefined
 
@@ -91,6 +86,78 @@ describe('googleDriveClient', () => {
     await vi.advanceTimersByTimeAsync(120_000)
 
     await rejectionExpectation
+  })
+
+  it('reuses a cached access token before it expires', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-16T00:00:00.000Z'))
+    const initTokenClient = vi.fn((config) => ({
+      requestAccessToken: vi.fn(() => {
+        config.callback({
+          access_token: 'cached-token',
+          expires_in: 3600,
+          scope: 'drive-scope',
+          token_type: 'Bearer',
+        })
+      }),
+    }))
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+
+    await expect(
+      requestGoogleDriveAccessToken({ clientId: 'client-id' }),
+    ).resolves.toMatchObject({
+      accessToken: 'cached-token',
+      scope: 'drive-scope',
+    })
+    window.google = undefined
+
+    await expect(
+      requestGoogleDriveAccessToken({ clientId: 'client-id' }),
+    ).resolves.toMatchObject({
+      accessToken: 'cached-token',
+      scope: 'drive-scope',
+    })
+    expect(initTokenClient).toHaveBeenCalledTimes(1)
+  })
+
+  it('requests a new access token when the cached token is close to expiry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-16T00:00:00.000Z'))
+    let tokenIndex = 0
+    const initTokenClient = vi.fn((config) => ({
+      requestAccessToken: vi.fn(() => {
+        tokenIndex += 1
+        config.callback({
+          access_token: `token-${tokenIndex}`,
+          expires_in: 120,
+          scope: 'drive-scope',
+          token_type: 'Bearer',
+        })
+      }),
+    }))
+    window.google = {
+      accounts: {
+        oauth2: {
+          initTokenClient,
+        },
+      },
+    }
+
+    await expect(
+      requestGoogleDriveAccessToken({ clientId: 'client-id' }),
+    ).resolves.toMatchObject({ accessToken: 'token-1' })
+    vi.setSystemTime(new Date('2026-06-16T00:01:01.000Z'))
+
+    await expect(
+      requestGoogleDriveAccessToken({ clientId: 'client-id' }),
+    ).resolves.toMatchObject({ accessToken: 'token-2' })
+    expect(initTokenClient).toHaveBeenCalledTimes(2)
   })
 
   it('removes a failed Google Identity script before retrying', async () => {

@@ -26,9 +26,7 @@ Eazy Chorus는 GitHub Pages에서 정적 프론트엔드로 배포한다.
 
 Project File 섹션에서는 로컬 파일 외에 Google Drive 프로젝트를 열 수 있다.
 
-- `Google로 연결`: Google OAuth 흐름을 명시적으로 시작한다.
 - `Drive 열기`: 공유 링크를 붙여 넣어 `.eazychorus` 파일을 연다.
-- `Drive 선택`: Google Picker에서 Drive 파일을 직접 선택해 연다.
 
 Drive 파일의 권한에 따라 앱 모드가 달라진다.
 

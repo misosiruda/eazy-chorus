@@ -141,7 +141,7 @@ v1은 다음을 만족해야 한다.
 - 사용자는 새 프로젝트를 만들 수 있다.
 - MR과 파트 음원을 포함한 `.eazychorus` 파일을 저장할 수 있다.
 - `.eazychorus` 파일을 다시 열면 동일한 프로젝트가 복원된다.
-- Google Drive 공유 링크 또는 Picker로 `.eazychorus` 파일을 열 수 있다.
+- Google Drive 공유 링크로 `.eazychorus` 파일을 열 수 있다.
 - 일본어/차음/해석 형식에서 차음 가사를 추출하고 confirm할 수 있다.
 - 파트별 가사를 tap-sync로 맞출 수 있다.
 - gap 구간을 지정해 가사가 없는 구간을 만들 수 있다.
