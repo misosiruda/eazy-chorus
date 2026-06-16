@@ -224,8 +224,10 @@ describe('HomePage', () => {
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
     ).toBeInTheDocument()
     expect(screen.getByLabelText('Google Drive 공유 링크')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Google로 연결' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Drive 열기' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Drive 선택' })).toBeDisabled()
+    expect(screen.getByText('Google Drive 앱 설정 필요')).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: 'Project Meta' }),
     ).toBeInTheDocument()
@@ -241,6 +243,35 @@ describe('HomePage', () => {
     expect(
       screen.queryByRole('heading', { name: 'Lane 설정' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('requests Google OAuth from the explicit Drive connection entry point', async () => {
+    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
+    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
+    driveProjectMocks.requestGoogleDriveAccessToken.mockResolvedValue({
+      accessToken: 'readonly-token',
+    })
+    const user = userEvent.setup()
+
+    renderHomePage()
+
+    expect(screen.getByRole('button', { name: 'Google로 연결' })).toBeEnabled()
+    expect(screen.getByText('Google Picker 설정 필요')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Google로 연결' }))
+
+    expect(
+      driveProjectMocks.requestGoogleDriveAccessToken,
+    ).toHaveBeenCalledWith({
+      clientId: 'google-client-id',
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+    })
+    expect(
+      await screen.findByText('Google Drive 연결이 준비되었습니다.'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Google Drive 연결됨, Picker 설정 필요'),
+    ).toBeInTheDocument()
   })
 
   it('shows a blurred loading overlay while saving a project file', async () => {
