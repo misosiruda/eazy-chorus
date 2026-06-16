@@ -10,7 +10,6 @@ const GOOGLE_DRIVE_PROJECT_FIELDS =
   'id,name,mimeType,resourceKey,version,modifiedTime,headRevisionId,capabilities(canDownload,canEdit,canModifyContent)'
 const GOOGLE_IDENTITY_SCRIPT_LOAD_TIMEOUT_MS = 30_000
 const GOOGLE_TOKEN_REQUEST_TIMEOUT_MS = 120_000
-const GOOGLE_DRIVE_TOKEN_CACHE_KEY = 'eazy-chorus.google-drive-token-cache.v1'
 const GOOGLE_DRIVE_TOKEN_EXPIRY_BUFFER_MS = 60_000
 
 export const GOOGLE_DRIVE_READONLY_SCOPE =
@@ -65,10 +64,6 @@ type GoogleDriveAccessTokenCacheEntry = {
   tokenType?: string
 }
 
-type GoogleDriveAccessTokenCache = {
-  entries?: Record<string, GoogleDriveAccessTokenCacheEntry>
-}
-
 export type GoogleDriveClientErrorReason =
   | 'download-request-failed'
   | 'google-identity-load-failed'
@@ -96,6 +91,10 @@ export class GoogleDriveClientError extends Error {
 }
 
 let googleIdentityScriptPromise: Promise<void> | null = null
+let googleDriveAccessTokenCache: Record<
+  string,
+  GoogleDriveAccessTokenCacheEntry
+> = {}
 
 export function isGoogleDriveIdentityReady(): boolean {
   return !!window.google?.accounts?.oauth2?.initTokenClient
@@ -217,8 +216,7 @@ function readCachedGoogleDriveAccessToken({
   scope: string
 }): GoogleDriveAccessToken | null {
   const cacheKey = createGoogleDriveAccessTokenCacheKey(clientId, scope)
-  const cache = readGoogleDriveAccessTokenCache()
-  const entry = cache.entries?.[cacheKey]
+  const entry = googleDriveAccessTokenCache[cacheKey]
   if (!entry) {
     return null
   }
@@ -227,8 +225,7 @@ function readCachedGoogleDriveAccessToken({
     !entry.accessToken ||
     entry.expiresAt - GOOGLE_DRIVE_TOKEN_EXPIRY_BUFFER_MS <= Date.now()
   ) {
-    delete cache.entries?.[cacheKey]
-    writeGoogleDriveAccessTokenCache(cache)
+    delete googleDriveAccessTokenCache[cacheKey]
     return null
   }
 
@@ -253,15 +250,19 @@ function writeCachedGoogleDriveAccessToken({
     return
   }
 
-  const cache = readGoogleDriveAccessTokenCache()
-  const entries = cache.entries ?? {}
-  entries[createGoogleDriveAccessTokenCacheKey(clientId, scope)] = {
-    accessToken: token.accessToken,
-    expiresAt: Date.now() + token.expiresIn * 1000,
-    scope: token.scope,
-    tokenType: token.tokenType,
+  googleDriveAccessTokenCache = {
+    ...googleDriveAccessTokenCache,
+    [createGoogleDriveAccessTokenCacheKey(clientId, scope)]: {
+      accessToken: token.accessToken,
+      expiresAt: Date.now() + token.expiresIn * 1000,
+      scope: token.scope,
+      tokenType: token.tokenType,
+    },
   }
-  writeGoogleDriveAccessTokenCache({ entries })
+}
+
+export function clearGoogleDriveAccessTokenCacheForTesting() {
+  googleDriveAccessTokenCache = {}
 }
 
 function createGoogleDriveAccessTokenCacheKey(
@@ -269,40 +270,6 @@ function createGoogleDriveAccessTokenCacheKey(
   scope: string,
 ): string {
   return `${clientId}\n${scope}`
-}
-
-function readGoogleDriveAccessTokenCache(): GoogleDriveAccessTokenCache {
-  try {
-    const rawCache = window.localStorage.getItem(GOOGLE_DRIVE_TOKEN_CACHE_KEY)
-    if (!rawCache) {
-      return {}
-    }
-
-    const parsedCache = JSON.parse(rawCache) as GoogleDriveAccessTokenCache
-    if (!parsedCache || typeof parsedCache !== 'object') {
-      return {}
-    }
-
-    return parsedCache
-  } catch {
-    return {}
-  }
-}
-
-function writeGoogleDriveAccessTokenCache(cache: GoogleDriveAccessTokenCache) {
-  try {
-    if (!cache.entries || Object.keys(cache.entries).length === 0) {
-      window.localStorage.removeItem(GOOGLE_DRIVE_TOKEN_CACHE_KEY)
-      return
-    }
-
-    window.localStorage.setItem(
-      GOOGLE_DRIVE_TOKEN_CACHE_KEY,
-      JSON.stringify(cache),
-    )
-  } catch {
-    // Token caching is an optimization; Drive actions can still request OAuth.
-  }
 }
 
 export async function fetchGoogleDriveFileMetadata({

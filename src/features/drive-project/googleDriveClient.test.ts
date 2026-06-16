@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import {
   GOOGLE_DRIVE_WRITE_SCOPE,
+  clearGoogleDriveAccessTokenCacheForTesting,
   createDriveResourceKeyHeader,
   downloadGoogleDriveFile,
   fetchGoogleDriveFileMetadata,
@@ -15,7 +16,7 @@ describe('googleDriveClient', () => {
 
   afterEach(() => {
     window.google = originalGoogle
-    window.localStorage.clear()
+    clearGoogleDriveAccessTokenCacheForTesting()
     document.getElementById('google-identity-services-script')?.remove()
     vi.useRealTimers()
   })
