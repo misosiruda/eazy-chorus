@@ -18,6 +18,7 @@ import {
 import {
   DriveProjectOpenError,
   GOOGLE_DRIVE_FILE_SCOPE,
+  GOOGLE_DRIVE_READONLY_SCOPE,
   GOOGLE_DRIVE_WRITE_SCOPE,
   GoogleDriveClientError,
   GoogleDrivePickerError,
@@ -212,6 +213,10 @@ export function HomePage() {
   const [isGoogleDrivePickerLoaded, setIsGoogleDrivePickerLoaded] = useState(
     () => isGoogleDrivePickerReady(),
   )
+  const [hasGoogleDriveAuthorization, setHasGoogleDriveAuthorization] =
+    useState(false)
+  const [isGoogleDriveAuthorizing, setIsGoogleDriveAuthorizing] =
+    useState(false)
   const [isWorkspaceSidebarOpen, setIsWorkspaceSidebarOpen] = useState(true)
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([])
   const [lyricsSource, setLyricsSource] = useState('')
@@ -294,6 +299,8 @@ export function HomePage() {
     ''
   const isGoogleDrivePickerConfigured =
     !!googleDrivePickerApiKey && !!googleDrivePickerAppId
+  const canRequestGoogleDriveAuthorization =
+    !!googleDriveClientId && isGoogleDriveIdentityLoaded
   const mrTrack = project.media.find((track) => track.role === 'mr')
   const selectedPart =
     project.parts.find((part) => part.id === selectedPartId) ?? project.parts[0]
@@ -2163,8 +2170,13 @@ export function HomePage() {
       return
     }
 
+    if (!googleDriveClientId) {
+      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
+      return
+    }
+
     if (!isGoogleDriveIdentityLoaded) {
-      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
+      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
       return
     }
 
@@ -2177,6 +2189,7 @@ export function HomePage() {
         clientId: googleDriveClientId,
         link,
       })
+      setHasGoogleDriveAuthorization(true)
       const didImport = await handleImportFile(result.file, {
         driveProjectSource: createDriveProjectSource({
           access: result.access,
@@ -2207,12 +2220,12 @@ export function HomePage() {
 
   async function openGoogleDrivePickerProject() {
     if (!googleDriveClientId) {
-      setStatusMessage('Google Drive 로그인을 사용할 수 없습니다.')
+      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
       return
     }
 
     if (!isGoogleDriveIdentityLoaded) {
-      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
+      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
       return
     }
 
@@ -2235,6 +2248,7 @@ export function HomePage() {
         clientId: googleDriveClientId,
         scope: GOOGLE_DRIVE_FILE_SCOPE,
       })
+      setHasGoogleDriveAuthorization(true)
       const pickedFile = await pickGoogleDriveProjectFile({
         accessToken: token.accessToken,
         appId: googleDrivePickerAppId,
@@ -2337,12 +2351,12 @@ export function HomePage() {
     }
 
     if (!googleDriveClientId) {
-      setStatusMessage('Google Drive 로그인을 사용할 수 없습니다.')
+      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
       return
     }
 
     if (!isGoogleDriveIdentityLoaded) {
-      setStatusMessage('Google Drive 로그인을 준비하는 중입니다.')
+      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
       return
     }
 
@@ -2355,6 +2369,7 @@ export function HomePage() {
         clientId: googleDriveClientId,
         scope: driveProjectSource.saveScope ?? GOOGLE_DRIVE_WRITE_SCOPE,
       })
+      setHasGoogleDriveAuthorization(true)
       const latestLocator = driveProjectSource.locator
       const latestMetadata = await fetchGoogleDriveFileMetadata({
         accessToken: token.accessToken,
@@ -2433,6 +2448,37 @@ export function HomePage() {
       setStatusMessage(getGoogleDriveProjectSaveErrorMessage(error))
     } finally {
       setIsSavingDriveProject(false)
+      setIsProjectFileBusy(false)
+    }
+  }
+
+  async function connectGoogleDriveAccount() {
+    if (!googleDriveClientId) {
+      setStatusMessage('Google Drive 앱 설정이 필요합니다.')
+      return
+    }
+
+    if (!isGoogleDriveIdentityLoaded) {
+      setStatusMessage('Google Drive 연결을 준비하는 중입니다.')
+      return
+    }
+
+    setIsGoogleDriveAuthorizing(true)
+    setProjectFileBusyMessage('Google 계정을 연결하는 중입니다.')
+    setIsProjectFileBusy(true)
+
+    try {
+      await requestGoogleDriveAccessToken({
+        clientId: googleDriveClientId,
+        scope: GOOGLE_DRIVE_READONLY_SCOPE,
+      })
+      setHasGoogleDriveAuthorization(true)
+      setStatusMessage('Google Drive 연결이 준비되었습니다.')
+    } catch (error) {
+      setHasGoogleDriveAuthorization(false)
+      setStatusMessage(getGoogleDriveProjectOpenErrorMessage(error))
+    } finally {
+      setIsGoogleDriveAuthorizing(false)
       setIsProjectFileBusy(false)
     }
   }
@@ -4336,12 +4382,22 @@ export function HomePage() {
                   disabled={isProjectFileBusy}
                 />
                 <button
+                  type="button"
+                  onClick={() => void connectGoogleDriveAccount()}
+                  disabled={
+                    isProjectFileBusy || !canRequestGoogleDriveAuthorization
+                  }
+                >
+                  {isGoogleDriveAuthorizing
+                    ? 'Google 연결 중'
+                    : 'Google로 연결'}
+                </button>
+                <button
                   type="submit"
                   disabled={
                     isProjectFileBusy ||
                     !driveProjectLink.trim() ||
-                    !googleDriveClientId ||
-                    !isGoogleDriveIdentityLoaded
+                    !canRequestGoogleDriveAuthorization
                   }
                 >
                   Drive 열기
@@ -4351,8 +4407,7 @@ export function HomePage() {
                   onClick={() => void openGoogleDrivePickerProject()}
                   disabled={
                     isProjectFileBusy ||
-                    !googleDriveClientId ||
-                    !isGoogleDriveIdentityLoaded ||
+                    !canRequestGoogleDriveAuthorization ||
                     !isGoogleDrivePickerConfigured ||
                     !isGoogleDrivePickerLoaded
                   }
@@ -4366,8 +4421,7 @@ export function HomePage() {
                     disabled={
                       exportDisabled ||
                       isProjectFileBusy ||
-                      !googleDriveClientId ||
-                      !isGoogleDriveIdentityLoaded
+                      !canRequestGoogleDriveAuthorization
                     }
                   >
                     {isSavingDriveProject ? 'Drive 저장 중' : 'Drive에 저장'}
@@ -4375,11 +4429,11 @@ export function HomePage() {
                 ) : null}
                 {!googleDriveClientId ? (
                   <p className="workspace-drive-status">
-                    Google Drive 로그인 설정 필요
+                    Google Drive 앱 설정 필요
                   </p>
                 ) : !isGoogleDriveIdentityLoaded ? (
                   <p className="workspace-drive-status">
-                    Google Drive 로그인 준비 중
+                    Google Drive 연결 준비 중
                   </p>
                 ) : driveProjectSource ? (
                   <p className="workspace-drive-status">
@@ -4387,13 +4441,21 @@ export function HomePage() {
                   </p>
                 ) : !isGoogleDrivePickerConfigured ? (
                   <p className="workspace-drive-status">
-                    Google Picker 설정 필요
+                    {hasGoogleDriveAuthorization
+                      ? 'Google Drive 연결됨, Picker 설정 필요'
+                      : 'Google Picker 설정 필요'}
                   </p>
                 ) : !isGoogleDrivePickerLoaded ? (
                   <p className="workspace-drive-status">
                     Google Picker 준비 중
                   </p>
-                ) : null}
+                ) : hasGoogleDriveAuthorization ? (
+                  <p className="workspace-drive-status">Google Drive 연결됨</p>
+                ) : (
+                  <p className="workspace-drive-status">
+                    Google Drive 연결 가능
+                  </p>
+                )}
               </form>
             </section>
 
@@ -6023,7 +6085,7 @@ function getErrorMessage(error: unknown): string {
 function getGoogleDriveProjectOpenErrorMessage(error: unknown): string {
   if (error instanceof DriveProjectOpenError) {
     if (error.reason === 'missing-google-client-id') {
-      return 'Google Drive 로그인을 사용할 수 없습니다. Google client id 설정을 확인하세요.'
+      return 'Google Drive 앱 설정이 필요합니다. Google client id 설정을 확인하세요.'
     }
 
     if (error.reason === 'invalid-link') {
