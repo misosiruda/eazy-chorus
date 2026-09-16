@@ -18,8 +18,6 @@ Eazy Chorus는 백엔드 없이 동작하는 프론트엔드 전용 화음 가�
   - 줄글 가사 표시, 현재 가사 강조, 반복 재생, 모바일 UX를 정의한다.
 - [사용법과 배포](./usage-and-deployment.md)
   - public URL, 샘플 프로젝트, 로컬 실행, 정적 build, GitHub Pages 배포 방법을 정의한다.
-- [Google Drive 연동](./google-drive.md)
-  - 공유 링크, Drive 저장 scope, OAuth token cache, Cloud 설정과 환경 변수를 정의한다.
 - [구현 로드맵](./implementation-roadmap.md)
   - 실제 개발 순서, milestone, acceptance criteria를 정의한다.
 
@@ -48,7 +46,7 @@ Eazy Chorus는 백엔드 없이 동작하는 프론트엔드 전용 화음 가�
 - 정적 프론트엔드 웹앱으로 배포한다.
 - `.eazychorus`는 ZIP 기반 단일 프로젝트 파일이다.
 - 음원은 `.eazychorus` 파일 내부에 포함한다.
-- Google Drive는 백엔드 없이 브라우저에서 OAuth token을 받아 직접 연동한다.
+- 프로젝트는 로컬 파일로 열고 저장하며, 공유받은 파일도 기기에 다운로드한 뒤 연다.
 - 음원은 스트리밍하지 않고, 필요한 트랙만 Web Audio API로 RAM에 디코딩해 재생한다.
 - MR을 제외한 보컬/파트 음원은 범례 Part의 audio variant가 될 수 있다.
 - 편집은 데스크탑 전용이다.

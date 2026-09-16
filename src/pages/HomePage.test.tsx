@@ -6,35 +6,6 @@ import {
   createNewProject,
   exportProjectPackage,
 } from '../features/project-file'
-
-const driveProjectMocks = vi.hoisted(() => ({
-  fetchGoogleDriveFileMetadata: vi.fn(),
-  isGoogleDriveIdentityReady: vi.fn(() => false),
-  openDriveProjectFromLink: vi.fn(),
-  preloadGoogleDriveIdentityScript: vi.fn(async () => undefined),
-  requestGoogleDriveAccessToken: vi.fn(),
-  updateGoogleDriveFileContent: vi.fn(),
-}))
-
-vi.mock('../features/drive-project', async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import('../features/drive-project')>()
-
-  return {
-    ...actual,
-    fetchGoogleDriveFileMetadata:
-      driveProjectMocks.fetchGoogleDriveFileMetadata,
-    isGoogleDriveIdentityReady: driveProjectMocks.isGoogleDriveIdentityReady,
-    openDriveProjectFromLink: driveProjectMocks.openDriveProjectFromLink,
-    preloadGoogleDriveIdentityScript:
-      driveProjectMocks.preloadGoogleDriveIdentityScript,
-    requestGoogleDriveAccessToken:
-      driveProjectMocks.requestGoogleDriveAccessToken,
-    updateGoogleDriveFileContent:
-      driveProjectMocks.updateGoogleDriveFileContent,
-  }
-})
-
 import { HomePage } from './HomePage'
 
 function renderHomePage(initialPath = '/editor') {
@@ -114,73 +85,44 @@ async function assignDraftToLeadLane(user: ReturnType<typeof userEvent.setup>) {
   fireEvent.mouseUp(draftDocument)
 }
 
-async function createDriveOpenResult(mode: 'editor' | 'viewer') {
-  const blob = await exportProjectPackage({
-    project: createNewProject(),
-    mediaFiles: {},
-  })
-
-  return {
-    access: {
-      canOpen: true,
-      canSaveToDrive: mode === 'editor',
-      mode,
-      reason: mode === 'editor' ? 'can-modify-content' : 'download-only',
-    },
-    file: new File([blob], 'drive-song.eazychorus', {
-      type: 'application/zip',
-    }),
-    locator: {
-      fileId: '1AbC_def-GHIjkl',
-    },
-    metadata: {
-      id: '1AbC_def-GHIjkl',
-      name: 'drive-song.eazychorus',
-      version: '1',
-      modifiedTime: '2026-06-15T01:00:00.000Z',
-      headRevisionId: 'head-1',
-      capabilities:
-        mode === 'editor'
-          ? {
-              canDownload: true,
-              canEdit: true,
-              canModifyContent: true,
-            }
-          : { canDownload: true },
-    },
-  }
-}
-
-function createEditableDriveMetadata(version = '1') {
-  return {
-    id: '1AbC_def-GHIjkl',
-    name: 'drive-song.eazychorus',
-    version,
-    modifiedTime:
-      version === '1' ? '2026-06-15T01:00:00.000Z' : '2026-06-15T02:00:00.000Z',
-    headRevisionId: version === '1' ? 'head-1' : 'head-2',
-    capabilities: {
-      canDownload: true,
-      canEdit: true,
-      canModifyContent: true,
-    },
-  }
-}
-
 describe('HomePage', () => {
-  afterEach(() => {
-    driveProjectMocks.fetchGoogleDriveFileMetadata.mockReset()
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReset()
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(false)
-    driveProjectMocks.openDriveProjectFromLink.mockReset()
-    driveProjectMocks.preloadGoogleDriveIdentityScript.mockReset()
-    driveProjectMocks.preloadGoogleDriveIdentityScript.mockResolvedValue(
-      undefined,
-    )
-    driveProjectMocks.requestGoogleDriveAccessToken.mockReset()
-    driveProjectMocks.updateGoogleDriveFileContent.mockReset()
-    vi.unstubAllEnvs()
-  })
+  it.each([
+    ['/editor', 'Editor Wizard'],
+    ['/practice', 'Practice Viewer'],
+  ])(
+    'opens a local project on %s without changing modes',
+    async (path, heading) => {
+      const user = userEvent.setup()
+      const project = createNewProject()
+      project.project.title = 'Local round-trip song'
+      project.parts[0].name = 'Local lead vocal'
+      const blob = await exportProjectPackage({ project, mediaFiles: {} })
+
+      renderHomePage(path)
+      await user.upload(
+        screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
+        new File([blob], 'local-song.eazychorus', { type: 'application/zip' }),
+      )
+
+      expect(
+        await screen.findByText('local-song.eazychorus 프로젝트를 열었습니다.'),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument()
+      if (path === '/editor') {
+        expect(
+          screen.getByDisplayValue('Local round-trip song'),
+        ).toBeInTheDocument()
+        expect(
+          screen.getByRole('button', { name: '.eazychorus 저장' }),
+        ).toBeEnabled()
+      } else {
+        expect(screen.getByText('Local lead vocal')).toBeInTheDocument()
+        expect(
+          screen.queryByRole('button', { name: '.eazychorus 저장' }),
+        ).toBeNull()
+      }
+    },
+  )
 
   it('renders milestone 1 project file controls as active workspace actions', () => {
     renderHomePage()
@@ -206,15 +148,6 @@ describe('HomePage', () => {
     expect(
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('Google Drive 공유 링크')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Drive 열기' })).toBeDisabled()
-    expect(
-      screen.queryByRole('button', { name: 'Google로 연결' }),
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', { name: 'Drive 선택' }),
-    ).not.toBeInTheDocument()
-    expect(screen.getByText('Google Drive 앱 설정 필요')).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: 'Project Meta' }),
     ).toBeInTheDocument()
@@ -313,175 +246,6 @@ describe('HomePage', () => {
     expect(
       screen.getByLabelText('.eazychorus 프로젝트 파일 열기'),
     ).toBeInTheDocument()
-  })
-
-  it('opens a Google Drive viewer project in practice mode', async () => {
-    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
-    const user = userEvent.setup()
-    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
-      await createDriveOpenResult('viewer'),
-    )
-
-    renderHomePage()
-
-    await user.type(
-      screen.getByLabelText('Google Drive 공유 링크'),
-      'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
-    )
-    await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
-
-    expect(driveProjectMocks.openDriveProjectFromLink).toHaveBeenCalledWith({
-      clientId: 'google-client-id',
-      link: 'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
-    })
-    expect(
-      await screen.findByRole('heading', { name: 'Practice Viewer' }),
-    ).toBeInTheDocument()
-    expect(
-      await screen.findByText(
-        'Google Drive에서 drive-song.eazychorus 프로젝트를 열었습니다. 보기 전용입니다.',
-      ),
-    ).toBeInTheDocument()
-  })
-
-  it('saves an editable Google Drive project after rechecking source metadata', async () => {
-    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
-    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
-      await createDriveOpenResult('editor'),
-    )
-    driveProjectMocks.requestGoogleDriveAccessToken.mockResolvedValue({
-      accessToken: 'write-token',
-    })
-    driveProjectMocks.fetchGoogleDriveFileMetadata.mockResolvedValue(
-      createEditableDriveMetadata('1'),
-    )
-    driveProjectMocks.updateGoogleDriveFileContent.mockResolvedValue(
-      createEditableDriveMetadata('2'),
-    )
-    const user = userEvent.setup()
-
-    renderHomePage()
-
-    await user.type(
-      screen.getByLabelText('Google Drive 공유 링크'),
-      'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
-    )
-    await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
-    await screen.findByText(
-      'Google Drive에서 drive-song.eazychorus 프로젝트를 열었습니다. 편집 권한입니다.',
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
-
-    expect(
-      await screen.findByText('Google Drive에 프로젝트를 저장했습니다.'),
-    ).toBeInTheDocument()
-    expect(
-      driveProjectMocks.requestGoogleDriveAccessToken,
-    ).toHaveBeenCalledWith({
-      clientId: 'google-client-id',
-      scope: 'https://www.googleapis.com/auth/drive',
-    })
-    expect(driveProjectMocks.fetchGoogleDriveFileMetadata).toHaveBeenCalledWith(
-      {
-        accessToken: 'write-token',
-        locator: { fileId: '1AbC_def-GHIjkl' },
-      },
-    )
-    expect(driveProjectMocks.updateGoogleDriveFileContent).toHaveBeenCalledWith(
-      {
-        accessToken: 'write-token',
-        content: expect.any(Blob),
-        locator: { fileId: '1AbC_def-GHIjkl' },
-      },
-    )
-  })
-
-  it('blocks Google Drive save when the source revision changed', async () => {
-    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
-    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
-      await createDriveOpenResult('editor'),
-    )
-    driveProjectMocks.requestGoogleDriveAccessToken.mockResolvedValue({
-      accessToken: 'write-token',
-    })
-    driveProjectMocks.fetchGoogleDriveFileMetadata.mockResolvedValue(
-      createEditableDriveMetadata('2'),
-    )
-    const user = userEvent.setup()
-
-    renderHomePage()
-
-    await user.type(
-      screen.getByLabelText('Google Drive 공유 링크'),
-      'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
-    )
-    await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
-    await screen.findByText(
-      'Google Drive에서 drive-song.eazychorus 프로젝트를 열었습니다. 편집 권한입니다.',
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
-
-    expect(
-      await screen.findByText(
-        'Google Drive 원본이 다른 곳에서 변경되었습니다. 다시 열거나 로컬 파일로 저장하세요.',
-      ),
-    ).toBeInTheDocument()
-    expect(
-      driveProjectMocks.updateGoogleDriveFileContent,
-    ).not.toHaveBeenCalled()
-    expect(
-      screen.queryByRole('button', { name: 'Drive에 저장' }),
-    ).not.toBeInTheDocument()
-  })
-
-  it('blocks Google Drive save when write permission is removed', async () => {
-    vi.stubEnv('VITE_GOOGLE_CLIENT_ID', 'google-client-id')
-    driveProjectMocks.isGoogleDriveIdentityReady.mockReturnValue(true)
-    driveProjectMocks.openDriveProjectFromLink.mockResolvedValue(
-      await createDriveOpenResult('editor'),
-    )
-    driveProjectMocks.requestGoogleDriveAccessToken.mockResolvedValue({
-      accessToken: 'write-token',
-    })
-    driveProjectMocks.fetchGoogleDriveFileMetadata.mockResolvedValue({
-      ...createEditableDriveMetadata('1'),
-      capabilities: {
-        canDownload: true,
-        canEdit: true,
-        canModifyContent: false,
-      },
-    })
-    const user = userEvent.setup()
-
-    renderHomePage()
-
-    await user.type(
-      screen.getByLabelText('Google Drive 공유 링크'),
-      'https://drive.google.com/file/d/1AbC_def-GHIjkl/view',
-    )
-    await user.click(screen.getByRole('button', { name: 'Drive 열기' }))
-    await screen.findByText(
-      'Google Drive에서 drive-song.eazychorus 프로젝트를 열었습니다. 편집 권한입니다.',
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Drive에 저장' }))
-
-    expect(
-      await screen.findByText(
-        'Google Drive 편집 권한이 없어 저장할 수 없습니다.',
-      ),
-    ).toBeInTheDocument()
-    expect(
-      driveProjectMocks.updateGoogleDriveFileContent,
-    ).not.toHaveBeenCalled()
-    expect(
-      screen.queryByRole('button', { name: 'Drive에 저장' }),
-    ).not.toBeInTheDocument()
   })
 
   it('adds a part from the Audio step form', async () => {
