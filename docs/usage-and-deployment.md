@@ -10,8 +10,8 @@ Eazy Chorus는 GitHub Pages에서 정적 프론트엔드로 배포한다.
 ## 샘플 프로젝트 열기
 
 1. 앱을 연다.
-2. 상단의 `샘플 열기` 버튼을 누른다.
-3. `Viewer Mode`에서 cue 강조, Part Mark, Mixer, Parts 패널을 확인한다.
+2. Project File 영역의 `샘플 열기` 버튼을 누른다.
+3. 연습자 화면으로 이동해 `Viewer Mode`의 cue 강조, Part Mark, Mixer, Parts 패널을 확인한다.
 4. 직접 파일로 확인하려면 샘플 `.eazychorus` 파일을 내려받은 뒤 `파일 열기`로 불러온다.
 
 샘플 프로젝트에는 다음 항목이 포함된다.
@@ -22,19 +22,21 @@ Eazy Chorus는 GitHub Pages에서 정적 프론트엔드로 배포한다.
 - Main/Sub segment role
 - highlight, line-above, line-below Part Mark
 
-## Google Drive 프로젝트 열기
+## 프로젝트 파일 열기와 저장
 
-Project File 섹션에서는 로컬 파일 외에 Google Drive 프로젝트를 열 수 있다.
+Project File 섹션에서 기기에 저장된 `.eazychorus` 프로젝트를 연다. 로그인이나 클라우드 연동 설정은 필요하지 않다.
 
-- `Drive 열기`: 공유 링크를 붙여 넣어 `.eazychorus` 파일을 연다.
+1. `파일 열기`를 눌러 `.eazychorus` 파일을 선택한다.
+2. 편집자 화면에서는 프로젝트를 수정하고, 연습자 화면에서는 재생과 연습을 진행한다. 파일을 열어도 현재 화면은 유지된다.
+3. 편집 내용을 보관하려면 편집자 화면의 `.eazychorus 저장`을 눌러 파일을 내려받는다.
 
-Drive 파일의 권한에 따라 앱 모드가 달라진다.
+## 프로젝트 공유
 
-- 편집 권한이 있으면 Editor로 열리고 `Drive에 저장`을 사용할 수 있다.
-- 다운로드만 가능하거나 보기 전용이면 Practice Viewer로 열린다.
-- 다운로드 권한이 없으면 파일을 열 수 없다.
+1. 작성자는 편집한 프로젝트를 `.eazychorus` 파일로 저장한다.
+2. 메신저나 메일 등으로 파일을 전달한다.
+3. 받은 사람은 파일을 기기에 다운로드한 뒤 앱의 `파일 열기`로 불러온다.
 
-Google Drive 설정, OAuth scope, Google Cloud 환경 변수는 [Google Drive 연동](./google-drive.md)에 정리한다.
+앱은 로컬 파일을 자동으로 덮어쓰거나 클라우드에 동기화하지 않는다. 수정 후에는 파일을 다시 저장해 전달한다.
 
 ## 로컬 실행
 
