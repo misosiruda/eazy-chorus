@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
+import * as projectFile from '../features/project-file'
 import {
   createNewProject,
   exportProjectPackage,
@@ -167,6 +168,18 @@ describe('HomePage', () => {
 
   it('shows a blurred loading overlay while saving a project file', async () => {
     const user = userEvent.setup()
+    const savedBlob = await exportProjectPackage({
+      project: createNewProject(),
+      mediaFiles: {},
+    })
+    let finishExport!: (blob: Blob) => void
+    const pendingExport = new Promise<Blob>((resolve) => {
+      finishExport = resolve
+    })
+    // Keep saving pending until the loading state has been asserted.
+    const exportSpy = vi
+      .spyOn(projectFile, 'exportProjectPackage')
+      .mockReturnValueOnce(pendingExport)
     const originalCreateObjectUrl = URL.createObjectURL
     const originalRevokeObjectUrl = URL.revokeObjectURL
     const originalAnchorClick = HTMLAnchorElement.prototype.click
@@ -195,10 +208,27 @@ describe('HomePage', () => {
         '프로젝트 파일을 저장하는 중입니다.',
       )
       expect(document.querySelector('.app-content-busy')).toBeInTheDocument()
+      expect(exportSpy).toHaveBeenCalledTimes(1)
+      expect(URL.createObjectURL).not.toHaveBeenCalled()
+
+      await act(async () => {
+        finishExport(savedBlob)
+        await pendingExport
+      })
+
       expect(
         await screen.findByText('.eazychorus 프로젝트 파일을 내보냈습니다.'),
       ).toBeInTheDocument()
+      expect(loadingOverlay).not.toBeInTheDocument()
+      expect(
+        document.querySelector('.app-content-busy'),
+      ).not.toBeInTheDocument()
+      expect(URL.createObjectURL).toHaveBeenCalledWith(savedBlob)
+      expect(
+        screen.getByRole('button', { name: '.eazychorus 저장' }),
+      ).toBeEnabled()
     } finally {
+      exportSpy.mockRestore()
       Object.defineProperty(URL, 'createObjectURL', {
         configurable: true,
         value: originalCreateObjectUrl,
